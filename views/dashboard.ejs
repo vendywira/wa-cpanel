@@ -1,0 +1,1210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <style>
+        :root {
+            --wa-green: #25D366;
+            --wa-teal: #128C7E;
+            --wa-dark: #075E54;
+            --gradient-primary: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --gradient-wa: linear-gradient(135deg, #25D366 0%, #128C7E 100%);
+            --gradient-success: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            --gradient-danger: linear-gradient(135deg, #eb3349 0%, #f45c43 100%);
+            --gradient-info: linear-gradient(135deg, #2193b0 0%, #6dd5ed 100%);
+            --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.08);
+            --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.12);
+            --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.15);
+            --radius-sm: 0.5rem;
+            --radius-md: 1rem;
+            --radius-lg: 1.5rem;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: var(--gradient-primary);
+            min-height: 100vh;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            color: #1f2937;
+            line-height: 1.6;
+        }
+
+        /* Navbar */
+        .navbar {
+            background: rgba(255, 255, 255, 0.98) !important;
+            backdrop-filter: blur(12px);
+            box-shadow: var(--shadow-sm);
+            padding: 0.75rem 0;
+        }
+
+        .navbar-brand {
+            color: var(--wa-dark) !important;
+            font-weight: 700;
+            font-size: 1.35rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .navbar-brand i {
+            color: var(--wa-green);
+            font-size: 1.5rem;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.4rem 0.85rem;
+            border-radius: 2rem;
+            font-size: 0.85rem;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+
+        .status-badge.connected {
+            background: rgba(37, 211, 102, 0.15);
+            color: var(--wa-teal);
+        }
+
+        .status-badge.disconnected {
+            background: rgba(220, 53, 69, 0.15);
+            color: #dc3545;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        .status-badge.connected .status-dot {
+            background: var(--wa-green);
+        }
+
+        .status-badge.disconnected .status-dot {
+            background: #dc3545;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(1.2); }
+        }
+
+        .btn-logout-nav {
+            background: var(--gradient-danger);
+            border: none;
+            color: white;
+            font-weight: 500;
+            padding: 0.4rem 1rem;
+            border-radius: 2rem;
+            transition: all 0.3s ease;
+            font-size: 0.85rem;
+        }
+
+        .btn-logout-nav:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(235, 51, 73, 0.3);
+            color: white;
+        }
+
+        /* Stats Cards */
+        .stat-card {
+            background: white;
+            border-radius: var(--radius-md);
+            padding: 1.5rem;
+            box-shadow: var(--shadow-sm);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            height: 100%;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-4px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .stat-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: var(--radius-sm);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            color: white;
+            margin-bottom: 1rem;
+        }
+
+        .stat-icon.uptime { background: var(--gradient-info); }
+        .stat-icon.phone { background: var(--gradient-wa); }
+        .stat-icon.registered { background: var(--gradient-success); }
+
+        .stat-value {
+            font-size: 1.75rem;
+            font-weight: 700;
+            color: var(--wa-dark);
+            margin-bottom: 0.25rem;
+            word-break: break-word;
+            overflow-wrap: break-word;
+            max-width: 100%;
+            line-height: 1.3;
+        }
+        
+        /* Phone number special styling to prevent overflow */
+        #phoneNumber {
+            font-size: 1.15rem;
+            word-break: break-all;
+            overflow-wrap: anywhere;
+        }
+
+        .stat-label {
+            color: #6b7280;
+            font-size: 0.875rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        /* Section Cards */
+        .section-card {
+            background: white;
+            border-radius: var(--radius-md);
+            padding: 1.75rem;
+            box-shadow: var(--shadow-sm);
+            margin-bottom: 1.5rem;
+            transition: all 0.3s ease;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .section-card:hover {
+            box-shadow: var(--shadow-md);
+        }
+
+        .section-title {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--wa-dark);
+            margin-bottom: 1.25rem;
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+        }
+
+        .section-title i {
+            color: var(--wa-green);
+        }
+
+        /* Form Controls */
+        .form-label {
+            font-weight: 500;
+            color: #374151;
+            margin-bottom: 0.4rem;
+            font-size: 0.9rem;
+        }
+
+        .form-control {
+            border: 2px solid #e5e7eb;
+            border-radius: var(--radius-sm);
+            padding: 0.65rem 1rem;
+            font-size: 0.95rem;
+            transition: all 0.2s ease;
+        }
+
+        .form-control:focus {
+            border-color: var(--wa-green);
+            box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.15);
+        }
+
+        .form-text {
+            font-size: 0.8rem;
+            color: #9ca3af;
+            margin-top: 0.3rem;
+        }
+
+        /* Buttons */
+        .btn-wa {
+            background: var(--gradient-wa);
+            border: none;
+            color: white;
+            font-weight: 600;
+            padding: 0.7rem 1.5rem;
+            border-radius: var(--radius-sm);
+            transition: all 0.3s ease;
+            font-size: 0.95rem;
+        }
+
+        .btn-wa:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(37, 211, 102, 0.35);
+            color: white;
+        }
+
+        .btn-wa:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+        }
+
+        .btn-wa-outline {
+            background: transparent;
+            border: 2px solid var(--wa-green);
+            color: var(--wa-green);
+            font-weight: 600;
+            padding: 0.65rem 1.5rem;
+            border-radius: var(--radius-sm);
+            transition: all 0.3s ease;
+            font-size: 0.95rem;
+        }
+
+        .btn-wa-outline:hover:not(:disabled) {
+            background: var(--wa-green);
+            color: white;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(37, 211, 102, 0.35);
+        }
+
+        .btn-wa-outline:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+        }
+
+        .btn-danger-gradient {
+            background: var(--gradient-danger);
+            border: none;
+            color: white;
+            font-weight: 600;
+            padding: 0.7rem 2rem;
+            border-radius: var(--radius-sm);
+            transition: all 0.3s ease;
+        }
+
+        .btn-danger-gradient:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(235, 51, 73, 0.35);
+            color: white;
+        }
+
+        /* Result Alerts */
+        .result-box {
+            margin-top: 1rem;
+            padding: 0.85rem 1rem;
+            border-radius: var(--radius-sm);
+            display: none;
+            animation: slideDown 0.3s ease;
+            font-size: 0.9rem;
+        }
+
+        .result-box.show {
+            display: block;
+        }
+
+        .result-box.alert-success {
+            background: rgba(37, 211, 102, 0.1);
+            border: 1px solid var(--wa-green);
+            color: var(--wa-dark);
+        }
+
+        .result-box.alert-danger {
+            background: rgba(220, 53, 69, 0.1);
+            border: 1px solid #dc3545;
+            color: #dc3545;
+        }
+
+        @keyframes slideDown {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Modal Styling */
+        .modal-content {
+            border-radius: var(--radius-lg);
+            border: none;
+            overflow: hidden;
+        }
+
+        .modal-header {
+            background: var(--gradient-wa);
+            border: none;
+            padding: 1.25rem 1.5rem;
+        }
+
+        .modal-title {
+            color: white;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .modal-body {
+            padding: 1.5rem;
+        }
+
+        .nav-tabs .nav-link {
+            color: #6b7280;
+            font-weight: 600;
+            border: none;
+            border-bottom: 3px solid transparent;
+            padding: 0.75rem 1.25rem;
+            transition: all 0.2s ease;
+        }
+
+        .nav-tabs .nav-link.active {
+            color: var(--wa-green);
+            border-bottom-color: var(--wa-green);
+            background: transparent;
+        }
+
+        .nav-tabs .nav-link:hover:not(.active) {
+            color: var(--wa-teal);
+            border-bottom-color: rgba(18, 140, 126, 0.3);
+        }
+
+        .pairing-code-display {
+            background: linear-gradient(135deg, #f8fafc 0%, #e9ecef 100%);
+            border: 3px solid var(--wa-green);
+            border-radius: var(--radius-md);
+            padding: 1.5rem;
+            text-align: center;
+            margin: 1.5rem 0;
+        }
+
+        .pairing-code-display span {
+            font-family: 'Courier New', monospace;
+            font-size: 2.25rem;
+            font-weight: 700;
+            color: var(--wa-dark);
+            letter-spacing: 6px;
+            animation: pulseCode 2s infinite;
+        }
+
+        @keyframes pulseCode {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.03); }
+        }
+
+        .qr-code-wrapper {
+            background: white;
+            padding: 1.5rem;
+            border-radius: var(--radius-md);
+            border: 3px solid var(--wa-green);
+            display: inline-block;
+            margin: 1.5rem 0;
+        }
+
+        .qr-code-wrapper img {
+            max-width: 280px;
+            width: 100%;
+        }
+
+        .instruction-box {
+            background: rgba(33, 147, 176, 0.08);
+            border-radius: var(--radius-sm);
+            border-left: 4px solid var(--wa-teal);
+            padding: 1rem 1.25rem;
+            margin-top: 1.25rem;
+        }
+
+        .instruction-box ol {
+            padding-left: 1.25rem;
+            margin-bottom: 0;
+        }
+
+        .instruction-box li {
+            margin-bottom: 0.4rem;
+            font-size: 0.9rem;
+        }
+
+        .alert-timer {
+            background: rgba(255, 193, 7, 0.12);
+            border-radius: var(--radius-sm);
+            padding: 0.75rem 1rem;
+            margin-top: 1rem;
+            font-size: 0.9rem;
+        }
+
+        /* Logout Section */
+        .logout-section {
+            text-align: center;
+            padding: 2rem;
+        }
+
+        .logout-section .section-title {
+            justify-content: center;
+        }
+
+        /* Footer */
+        .footer {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 1.25rem 0;
+            margin-top: 3rem;
+            text-align: center;
+            color: var(--wa-dark);
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+
+        /* Responsive Adjustments */
+        @media (max-width: 767.98px) {
+            .section-card {
+                padding: 1.25rem;
+            }
+
+            .stat-value {
+                font-size: 1.5rem;
+            }
+
+            .stat-icon {
+                width: 40px;
+                height: 40px;
+                font-size: 1.25rem;
+            }
+
+            .pairing-code-display span {
+                font-size: 1.75rem;
+                letter-spacing: 4px;
+            }
+
+            .qr-code-wrapper img {
+                max-width: 240px;
+            }
+
+            .navbar .d-flex {
+                flex-wrap: wrap;
+                gap: 0.5rem !important;
+            }
+
+            .status-badge {
+                font-size: 0.75rem;
+                padding: 0.3rem 0.6rem;
+            }
+        }
+
+        @media (max-width: 575.98px) {
+            .stat-card {
+                padding: 1rem;
+            }
+
+            .stat-value {
+                font-size: 1.25rem;
+            }
+
+            .stat-label {
+                font-size: 0.75rem;
+            }
+        }
+
+        /* Loading Spinner */
+        .spinner-border-sm {
+            width: 1rem;
+            height: 1rem;
+        }
+
+        /* Smooth transitions for all interactive elements */
+        button, a, input, select, textarea {
+            transition: all 0.2s ease;
+        }
+    </style>
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar navbar-expand-lg">
+        <div class="container">
+            <a class="navbar-brand" href="/dashboard">
+                <i class="bi bi-whatsapp"></i>
+                WA Dashboard
+            </a>
+            <div class="d-flex align-items-center gap-2 flex-wrap">
+                <span class="text-muted me-1 d-none d-sm-inline">
+                    <i class="bi bi-person-circle me-1"></i>
+                    <%= typeof user !== 'undefined' && user ? user.name : 'User' %>
+                </span>
+                <span id="connectionStatus" class="status-badge disconnected">
+                    <span class="status-dot"></span>
+                    <span class="status-text">Disconnected</span>
+                </span>
+                <button class="btn btn-logout-nav" id="logoutBtnNav">
+                    <i class="bi bi-box-arrow-right me-1"></i> Logout
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="container py-4">
+        <!-- Stats Cards -->
+        <div class="row g-3 mb-4">
+            <div class="col-6 col-lg-4">
+                <div class="stat-card">
+                    <div class="stat-icon uptime">
+                        <i class="bi bi-clock-history"></i>
+                    </div>
+                    <div class="stat-value" id="uptime">00:00:00</div>
+                    <div class="stat-label">Uptime</div>
+                </div>
+            </div>
+            <div class="col-6 col-lg-4">
+                <div class="stat-card">
+                    <div class="stat-icon phone">
+                        <i class="bi bi-phone"></i>
+                    </div>
+                    <div class="stat-value" id="phoneNumber">-</div>
+                    <div class="stat-label">Phone Number</div>
+                </div>
+            </div>
+            <div class="col-12 col-lg-4">
+                <div class="stat-card">
+                    <div class="stat-icon registered">
+                        <i class="bi bi-check-circle"></i>
+                    </div>
+                    <div class="stat-value" id="registered">-</div>
+                    <div class="stat-label">Registered</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Connect WhatsApp Section -->
+        <div class="section-card">
+            <h5 class="section-title">
+                <i class="bi bi-link-45deg"></i> Connect WhatsApp
+            </h5>
+            <form id="pairForm">
+                <div class="mb-3">
+                    <label for="pairPhone" class="form-label">Phone Number</label>
+                    <input type="text" class="form-control" id="pairPhone" placeholder="6281234567890" required>
+                    <div class="form-text">Enter your WhatsApp number with country code (e.g., 62 for Indonesia)</div>
+                </div>
+                <div class="d-flex flex-column flex-sm-row gap-2">
+                    <button type="submit" class="btn btn-wa flex-grow-1" id="pairBtn">
+                        <i class="bi bi-key me-2"></i>Get Pairing Code
+                    </button>
+                    <button type="button" class="btn btn-wa-outline flex-grow-1 flex-sm-grow-0" id="qrBtn">
+                        <i class="bi bi-qr-code me-2"></i>Get QR Code
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Connection Modal -->
+        <div class="modal fade" id="connectionModal" tabindex="-1" aria-hidden="true">
+            <div class="modal-dialog modal-lg modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">
+                            <i class="bi bi-phone"></i> Connect WhatsApp
+                        </h5>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <!-- Tabs -->
+                        <ul class="nav nav-tabs mb-4" id="connectionTabs" role="tablist">
+                            <li class="nav-item flex-grow-1" role="presentation">
+                                <button class="nav-link active w-100" id="pairing-tab" data-bs-toggle="tab" data-bs-target="#pairing-panel" type="button" role="tab">
+                                    <i class="bi bi-key me-2"></i>Pairing Code
+                                </button>
+                            </li>
+                            <li class="nav-item flex-grow-1" role="presentation">
+                                <button class="nav-link w-100" id="qr-tab" data-bs-toggle="tab" data-bs-target="#qr-panel" type="button" role="tab">
+                                    <i class="bi bi-qr-code me-2"></i>QR Code
+                                </button>
+                            </li>
+                        </ul>
+
+                        <!-- Tab Content -->
+                        <div class="tab-content" id="connectionTabContent">
+                            <!-- Pairing Code Panel -->
+                            <div class="tab-pane fade show active" id="pairing-panel" role="tabpanel">
+                                <div class="text-center mb-3">
+                                    <i class="bi bi-whatsapp" style="font-size: 3rem; color: var(--wa-green);"></i>
+                                </div>
+
+                                <h6 class="text-muted text-center mb-3">Enter this code in your WhatsApp:</h6>
+
+                                <div class="pairing-code-display">
+                                    <span id="pairingCodeDisplay">--------</span>
+                                </div>
+
+                                <div class="d-grid mb-3">
+                                    <button type="button" class="btn btn-wa" id="copyPairingCode">
+                                        <i class="bi bi-clipboard me-2"></i>Copy Code
+                                    </button>
+                                </div>
+
+                                <div class="instruction-box">
+                                    <h6 class="mb-3"><i class="bi bi-info-circle me-2"></i>How to use:</h6>
+                                    <ol>
+                                        <li>Open WhatsApp on your phone</li>
+                                        <li>Tap <strong>Settings</strong></li>
+                                        <li>Tap <strong>Linked Devices</strong></li>
+                                        <li>Tap <strong>Link a Device</strong></li>
+                                        <li>Enter the 8-digit code shown above</li>
+                                    </ol>
+                                </div>
+
+                                <div class="alert-timer">
+                                    <i class="bi bi-clock me-2"></i>
+                                    <strong>Important:</strong> This code expires in <strong>2-3 minutes</strong>. Use it immediately!
+                                </div>
+                            </div>
+
+                            <!-- QR Code Panel -->
+                            <div class="tab-pane fade" id="qr-panel" role="tabpanel">
+                                <div class="text-center mb-3">
+                                    <i class="bi bi-whatsapp" style="font-size: 3rem; color: var(--wa-green);"></i>
+                                </div>
+
+                                <h6 class="text-muted text-center mb-3">Scan this QR Code with WhatsApp:</h6>
+
+                                <div class="text-center">
+                                    <div class="qr-code-wrapper">
+                                        <img id="qrCodeImage" src="" alt="QR Code">
+                                    </div>
+                                </div>
+
+                                <div class="d-grid gap-2 mb-3">
+                                    <button type="button" class="btn btn-wa" id="downloadQR">
+                                        <i class="bi bi-download me-2"></i>Download QR Code
+                                    </button>
+                                    <button type="button" class="btn btn-wa-outline" id="refreshQR">
+                                        <i class="bi bi-arrow-clockwise me-2"></i>Refresh QR Code
+                                    </button>
+                                </div>
+
+                                <div class="instruction-box">
+                                    <h6 class="mb-3"><i class="bi bi-info-circle me-2"></i>How to scan:</h6>
+                                    <ol>
+                                        <li>Open WhatsApp on your phone</li>
+                                        <li>Tap <strong>Settings</strong></li>
+                                        <li>Tap <strong>Linked Devices</strong></li>
+                                        <li>Tap <strong>Link a Device</strong></li>
+                                        <li>Point your camera at the QR Code above</li>
+                                    </ol>
+                                </div>
+
+                                <div class="alert-timer">
+                                    <i class="bi bi-lightbulb me-2"></i>
+                                    <strong>Tip:</strong> QR Code auto-refreshes when expired. Ensure good lighting when scanning.
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer justify-content-center border-0">
+                        <button type="button" class="btn btn-secondary px-4" data-bs-dismiss="modal">
+                            <i class="bi bi-x-circle me-2"></i>Close
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Send Text Message -->
+        <div class="section-card">
+            <h5 class="section-title">
+                <i class="bi bi-chat-dots"></i> Send Text Message
+            </h5>
+            <form id="textForm">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label for="textTo" class="form-label">Phone Number</label>
+                        <input type="text" class="form-control" id="textTo" placeholder="6281234567890" required>
+                    </div>
+                    <div class="col-md-6">
+                        <label for="textMessage" class="form-label">Message</label>
+                        <input type="text" class="form-control" id="textMessage" placeholder="Hello from Dashboard!" required>
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-wa mt-3" id="sendTextBtn">
+                    <i class="bi bi-send me-2"></i>Send Message
+                </button>
+                <div id="textResult" class="result-box"></div>
+            </form>
+        </div>
+
+        <!-- Send Image -->
+        <div class="section-card">
+            <h5 class="section-title">
+                <i class="bi bi-image"></i> Send Image
+            </h5>
+            <form id="imageForm">
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <label for="imageTo" class="form-label">Phone Number</label>
+                        <input type="text" class="form-control" id="imageTo" placeholder="6281234567890" required>
+                    </div>
+                    <div class="col-md-5">
+                        <label for="imageUrl" class="form-label">Image URL</label>
+                        <input type="url" class="form-control" id="imageUrl" placeholder="https://example.com/image.jpg" required>
+                    </div>
+                    <div class="col-md-3">
+                        <label for="imageCaption" class="form-label">Caption (optional)</label>
+                        <input type="text" class="form-control" id="imageCaption" placeholder="Caption text">
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-wa mt-3" id="sendImageBtn">
+                    <i class="bi bi-send me-2"></i>Send Image
+                </button>
+                <div id="imageResult" class="result-box"></div>
+            </form>
+        </div>
+
+        <!-- Send Document -->
+        <div class="section-card">
+            <h5 class="section-title">
+                <i class="bi bi-file-earmark"></i> Send Document
+            </h5>
+            <form id="documentForm">
+                <div class="row g-3">
+                    <div class="col-md-3">
+                        <label for="documentTo" class="form-label">Phone Number</label>
+                        <input type="text" class="form-control" id="documentTo" placeholder="6281234567890" required>
+                    </div>
+                    <div class="col-md-4">
+                        <label for="documentPath" class="form-label">File Path</label>
+                        <input type="text" class="form-control" id="documentPath" placeholder="/path/to/file.pdf" required>
+                    </div>
+                    <div class="col-md-2">
+                        <label for="documentFilename" class="form-label">Filename</label>
+                        <input type="text" class="form-control" id="documentFilename" placeholder="file.pdf">
+                    </div>
+                    <div class="col-md-3">
+                        <label for="documentCaption" class="form-label">Caption (optional)</label>
+                        <input type="text" class="form-control" id="documentCaption" placeholder="Caption">
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-wa mt-3" id="sendDocumentBtn">
+                    <i class="bi bi-send me-2"></i>Send Document
+                </button>
+                <div id="documentResult" class="result-box"></div>
+            </form>
+        </div>
+
+        <!-- Logout Section -->
+        <div class="section-card logout-section">
+            <h5 class="section-title">
+                <i class="bi bi-box-arrow-right"></i> Logout
+            </h5>
+            <p class="text-muted mb-3">Disconnect your WhatsApp session</p>
+            <button class="btn btn-danger-gradient" id="logoutBtn">
+                <i class="bi bi-box-arrow-right me-2"></i>Disconnect Session
+            </button>
+            <div id="logoutResult" class="result-box"></div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+        <div class="container">
+            <p class="mb-0">WhatsApp API Baileys v7.0 | Dashboard &copy; 2026</p>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Utility: Show result message
+        function showResult(elementId, message, success) {
+            var element = document.getElementById(elementId);
+            if (!element) return;
+            element.className = 'result-box show ' + (success ? 'alert-success' : 'alert-danger');
+            var icon = success ? 'check-circle' : 'exclamation-circle';
+            element.innerHTML = '<div class="d-flex align-items-center"><i class="bi bi-' + icon + ' me-2"></i><span>' + message + '</span></div>';
+            setTimeout(function() {
+                element.classList.remove('show');
+            }, 5000);
+        }
+
+        // Utility: Set button loading state
+        function setLoading(buttonId, loading) {
+            var btn = document.getElementById(buttonId);
+            if (!btn) return;
+
+            if (loading) {
+                btn.disabled = true;
+                if (!btn.dataset.originalText) {
+                    btn.dataset.originalText = btn.innerHTML;
+                }
+                btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Loading...';
+            } else {
+                btn.disabled = false;
+                if (btn.dataset.originalText) {
+                    btn.innerHTML = btn.dataset.originalText;
+                    delete btn.dataset.originalText;
+                }
+            }
+        }
+
+        // Utility: Format uptime seconds to HH:MM:SS
+        function formatUptime(seconds) {
+            var hours = Math.floor(seconds / 3600);
+            var minutes = Math.floor((seconds % 3600) / 60);
+            var secs = Math.floor(seconds % 60);
+            return String(hours).padStart(2, '0') + ':' + String(minutes).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
+        }
+
+        // Update connection status periodically
+        async function updateStatus() {
+            try {
+                var response = await fetch('/api/status');
+
+                if (!response.ok) {
+                    console.error('Status fetch failed:', response.status);
+                    return;
+                }
+
+                var data = await response.json();
+
+                // Update connection status badge
+                var statusEl = document.getElementById('connectionStatus');
+                if (data.connected) {
+                    statusEl.className = 'status-badge connected';
+                    statusEl.innerHTML = '<span class="status-dot"></span><span class="status-text">Connected</span>';
+                } else {
+                    statusEl.className = 'status-badge disconnected';
+                    statusEl.innerHTML = '<span class="status-dot"></span><span class="status-text">Disconnected</span>';
+                }
+
+                // Update stats
+                document.getElementById('uptime').textContent = formatUptime(data.uptime || 0);
+                document.getElementById('phoneNumber').textContent = data.user ? data.user.split('@')[0] : '-';
+                document.getElementById('registered').textContent = data.registered ? 'Yes' : 'No';
+            } catch (error) {
+                console.error('Status update failed:', error);
+            }
+        }
+
+        // Pairing Code Form Submit
+        document.getElementById('pairForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            setLoading('pairBtn', true);
+
+            try {
+                var phone = document.getElementById('pairPhone').value;
+                var response = await fetch('/api/pair?phone=' + encodeURIComponent(phone));
+
+                if (!response.ok) {
+                    var errorData;
+                    try {
+                        errorData = await response.json();
+                    } catch (e) {
+                        errorData = { error: 'Server error (HTTP ' + response.status + ')' };
+                    }
+                    showResult('textResult', 'Error: ' + (errorData.error || 'Failed to create pairing code'), false);
+                    alert('Error: ' + (errorData.error || 'Failed to create pairing code'));
+                    return;
+                }
+
+                var data = await response.json();
+
+                if (data.status) {
+                    document.getElementById('pairingCodeDisplay').textContent = data.pairing_code;
+
+                    var modal = new bootstrap.Modal(document.getElementById('connectionModal'));
+                    var pairingTabEl = document.getElementById('pairing-tab');
+                    var tab = new bootstrap.Tab(pairingTabEl);
+                    tab.show();
+                    modal.show();
+
+                    document.getElementById('pairPhone').value = '';
+                } else {
+                    alert('Error: ' + (data.error || 'Failed to create pairing code'));
+                }
+            } catch (error) {
+                console.error('Pairing code error:', error);
+                alert('Error: ' + error.message);
+            } finally {
+                setLoading('pairBtn', false);
+            }
+        });
+
+        // QR Code Button Click
+        document.getElementById('qrBtn').addEventListener('click', async function() {
+            setLoading('qrBtn', true);
+
+            try {
+                var response = await fetch('/api/qr');
+
+                if (!response.ok) {
+                    var errorData;
+                    try {
+                        errorData = await response.json();
+                    } catch (e) {
+                        errorData = { error: 'Server error (HTTP ' + response.status + ')' };
+                    }
+                    alert('QR Code Error: ' + (errorData.error || 'Failed to fetch QR code'));
+                    return;
+                }
+
+                var data = await response.json();
+
+                if (data.status) {
+                    document.getElementById('qrCodeImage').src = data.qr_code;
+
+                    var modal = new bootstrap.Modal(document.getElementById('connectionModal'));
+                    var qrTabEl = document.getElementById('qr-tab');
+                    var tab = new bootstrap.Tab(qrTabEl);
+                    tab.show();
+                    modal.show();
+                } else {
+                    alert('QR Code: ' + (data.error || 'Failed to fetch QR code'));
+                }
+            } catch (error) {
+                console.error('QR code error:', error);
+                alert('Error: ' + error.message);
+            } finally {
+                setLoading('qrBtn', false);
+            }
+        });
+
+        // Copy Pairing Code
+        document.getElementById('copyPairingCode').addEventListener('click', async function() {
+            var code = document.getElementById('pairingCodeDisplay').textContent;
+            var btn = document.getElementById('copyPairingCode');
+
+            try {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    await navigator.clipboard.writeText(code);
+                } else {
+                    var textArea = document.createElement('textarea');
+                    textArea.value = code;
+                    textArea.style.position = 'fixed';
+                    textArea.style.left = '-9999px';
+                    document.body.appendChild(textArea);
+                    textArea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(textArea);
+                }
+
+                var originalHTML = btn.innerHTML;
+                btn.innerHTML = '<i class="bi bi-check-circle me-2"></i>Copied!';
+                btn.classList.remove('btn-wa');
+                btn.classList.add('btn-success');
+
+                setTimeout(function() {
+                    btn.innerHTML = originalHTML;
+                    btn.classList.remove('btn-success');
+                    btn.classList.add('btn-wa');
+                }, 2000);
+            } catch (err) {
+                console.error('Copy failed:', err);
+                alert('Failed to copy code. Please copy manually.');
+            }
+        });
+
+        // Download QR Code
+        document.getElementById('downloadQR').addEventListener('click', function() {
+            var qrImage = document.getElementById('qrCodeImage').src;
+            if (!qrImage || qrImage === window.location.href) {
+                alert('QR Code not yet loaded.');
+                return;
+            }
+
+            var link = document.createElement('a');
+            link.download = 'whatsapp-qr-' + Date.now() + '.png';
+            link.href = qrImage;
+            link.click();
+        });
+
+        // Refresh QR Code
+        document.getElementById('refreshQR').addEventListener('click', async function() {
+            var btn = document.getElementById('refreshQR');
+            var originalText = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Refreshing...';
+
+            try {
+                var response = await fetch('/api/qr');
+
+                if (!response.ok) {
+                    var errorData;
+                    try {
+                        errorData = await response.json();
+                    } catch (e) {
+                        errorData = { error: 'Server error (HTTP ' + response.status + ')' };
+                    }
+                    alert('Failed to refresh QR code: ' + (errorData.error || 'Unknown error'));
+                    return;
+                }
+
+                var data = await response.json();
+
+                if (data.status) {
+                    document.getElementById('qrCodeImage').src = data.qr_code;
+                } else {
+                    alert('Failed to refresh QR code: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('Refresh QR code error:', error);
+                alert('Error: ' + error.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = originalText;
+            }
+        });
+
+        // Send Text Message
+        document.getElementById('textForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            setLoading('sendTextBtn', true);
+
+            try {
+                var to = document.getElementById('textTo').value;
+                var message = document.getElementById('textMessage').value;
+                var response = await fetch('/api/send-text?to=' + encodeURIComponent(to) + '&message=' + encodeURIComponent(message));
+
+                if (!response.ok) {
+                    var errorData;
+                    try {
+                        errorData = await response.json();
+                    } catch (e) {
+                        errorData = { error: 'Server error (HTTP ' + response.status + ')' };
+                    }
+                    showResult('textResult', 'Error: ' + (errorData.error || 'Failed to send message'), false);
+                    return;
+                }
+
+                var data = await response.json();
+
+                if (data.status) {
+                    showResult('textResult', 'Message sent successfully!', true);
+                    document.getElementById('textMessage').value = '';
+                } else {
+                    showResult('textResult', 'Error: ' + (data.error || 'Failed to send message'), false);
+                }
+            } catch (error) {
+                console.error('Send text error:', error);
+                showResult('textResult', 'Error: ' + error.message, false);
+            } finally {
+                setLoading('sendTextBtn', false);
+            }
+        });
+
+        // Send Image
+        document.getElementById('imageForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            setLoading('sendImageBtn', true);
+
+            try {
+                var to = document.getElementById('imageTo').value;
+                var image = document.getElementById('imageUrl').value;
+                var caption = document.getElementById('imageCaption').value;
+                var response = await fetch('/api/send-image?to=' + encodeURIComponent(to) + '&image=' + encodeURIComponent(image) + '&caption=' + encodeURIComponent(caption));
+
+                if (!response.ok) {
+                    var errorData;
+                    try {
+                        errorData = await response.json();
+                    } catch (e) {
+                        errorData = { error: 'Server error (HTTP ' + response.status + ')' };
+                    }
+                    showResult('imageResult', 'Error: ' + (errorData.error || 'Failed to send image'), false);
+                    return;
+                }
+
+                var data = await response.json();
+
+                if (data.status) {
+                    showResult('imageResult', 'Image sent successfully!', true);
+                    document.getElementById('imageUrl').value = '';
+                    document.getElementById('imageCaption').value = '';
+                } else {
+                    showResult('imageResult', 'Error: ' + (data.error || 'Failed to send image'), false);
+                }
+            } catch (error) {
+                console.error('Send image error:', error);
+                showResult('imageResult', 'Error: ' + error.message, false);
+            } finally {
+                setLoading('sendImageBtn', false);
+            }
+        });
+
+        // Send Document
+        document.getElementById('documentForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            setLoading('sendDocumentBtn', true);
+
+            try {
+                var to = document.getElementById('documentTo').value;
+                var documentPath = document.getElementById('documentPath').value;
+                var filename = document.getElementById('documentFilename').value;
+                var caption = document.getElementById('documentCaption').value;
+                var response = await fetch('/api/send-document?to=' + encodeURIComponent(to) + '&document=' + encodeURIComponent(documentPath) + '&filename=' + encodeURIComponent(filename) + '&caption=' + encodeURIComponent(caption));
+
+                if (!response.ok) {
+                    var errorData;
+                    try {
+                        errorData = await response.json();
+                    } catch (e) {
+                        errorData = { error: 'Server error (HTTP ' + response.status + ')' };
+                    }
+                    showResult('documentResult', 'Error: ' + (errorData.error || 'Failed to send document'), false);
+                    return;
+                }
+
+                var data = await response.json();
+
+                if (data.status) {
+                    showResult('documentResult', 'Document sent successfully!', true);
+                    document.getElementById('documentPath').value = '';
+                    document.getElementById('documentFilename').value = '';
+                    document.getElementById('documentCaption').value = '';
+                } else {
+                    showResult('documentResult', 'Error: ' + (data.error || 'Failed to send document'), false);
+                }
+            } catch (error) {
+                console.error('Send document error:', error);
+                showResult('documentResult', 'Error: ' + error.message, false);
+            } finally {
+                setLoading('sendDocumentBtn', false);
+            }
+        });
+
+        // Logout (nav and section buttons)
+        function handleLogout() {
+            if (!confirm('Are you sure you want to disconnect your WhatsApp session?')) return;
+
+            var btn = document.getElementById('logoutBtn');
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Disconnecting...';
+            }
+
+            fetch('/api/auth/logout', { method: 'POST' })
+                .then(function(response) {
+                    if (response.ok) {
+                        window.location.href = '/login';
+                    } else {
+                        showResult('logoutResult', 'Failed to disconnect. Please try again.', false);
+                    }
+                })
+                .catch(function(error) {
+                    console.error('Logout error:', error);
+                    showResult('logoutResult', 'Error: ' + error.message, false);
+                })
+                .finally(function() {
+                    if (btn) {
+                        btn.disabled = false;
+                        btn.innerHTML = '<i class="bi bi-box-arrow-right me-2"></i>Disconnect Session';
+                    }
+                });
+        }
+
+        document.getElementById('logoutBtnNav').addEventListener('click', handleLogout);
+        document.getElementById('logoutBtn').addEventListener('click', handleLogout);
+
+        // Initialize status on page load and refresh every 5 seconds
+        updateStatus();
+        setInterval(updateStatus, 5000);
+    </script>
+</body>
+</html>

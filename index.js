@@ -1,6 +1,7 @@
-import { 
-    default as makeWASocket, 
-    useMultiFileAuthState, 
+import dotenv from 'dotenv';
+import {
+    default as makeWASocket,
+    useMultiFileAuthState,
     DisconnectReason,
     Browsers,
     fetchLatestBaileysVersion,
@@ -10,8 +11,16 @@ import P from 'pino';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import http from 'http';
+import express from 'express';
+import { Server as SocketIO } from 'socket.io';
+import session from 'express-session';
+import cookieParser from 'cookie-parser';
 import readline from 'readline';
+import { SESSION_CONFIG, API_KEY } from './config/auth.js';
+import { verifyApiKey, requireAuth, login } from './middleware/auth.js';
+
+// Load environment variables
+dotenv.config();
 
 // ============ KONFIGURASI AWAL ============
 const __filename = fileURLToPath(import.meta.url);
@@ -23,7 +32,31 @@ let sock = null;
 let isConnected = false;
 let pairingRequested = false;
 let reconnectAttempts = 0;
+let currentQR = null; // Simpan QR code string
 const MAX_RECONNECT_ATTEMPTS = 10;
+
+// Express app setup
+const app = express();
+app.use(express.json());
+app.use(cookieParser());
+app.use(session(SESSION_CONFIG));
+app.set('view engine', 'ejs');
+app.set('views', path.join(__dirname, 'views'));
+
+// CORS headers
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, X-API-Key');
+    if (req.method === 'OPTIONS') {
+        res.sendStatus(200);
+    } else {
+        next();
+    }
+});
+
+// Serve static files
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Readline interface untuk input terminal
 const rl = readline.createInterface({
@@ -182,7 +215,7 @@ async function connectToWhatsApp() {
                 keys: makeCacheableSignalKeyStore(state.keys, logger)
             },
             logger: P({ level: 'silent' }),
-            browser: Browsers.ubuntu('Chrome'),
+            browser: Browsers.macOS('Chrome'),
             printQRInTerminal: false,
             markOnlineOnConnect: false,
             syncFullHistory: false,
@@ -196,7 +229,13 @@ async function connectToWhatsApp() {
         // ============ EVENT HANDLER ============
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect, qr } = update;
-            
+
+            // Simpan QR code terbaru
+            if (qr) {
+                currentQR = qr;
+                console.log('\n📱 QR Code telah di-generate');
+            }
+
             // Tampilkan QR jika ada (fallback method)
             if (qr && !sock.authState.creds.registered && !pairingRequested) {
                 console.log('\n📱 QR Code tersedia (metode alternatif)');
@@ -331,237 +370,304 @@ async function connectToWhatsApp() {
     }
 }
 
-// ============ HTTP SERVER UNTUK API ============
-const server = http.createServer(async (req, res) => {
-    // CORS headers
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-    res.setHeader('Content-Type', 'application/json');
-    
-    if (req.method === 'OPTIONS') {
-        res.writeHead(200);
-        res.end();
-        return;
-    }
-    
-    const url = new URL(req.url, `http://${req.headers.host}`);
-    const pathname = url.pathname;
-    
-    // ENDPOINT: KIRIM PESAN TEKS
-    if (pathname === '/send-text' && req.method === 'GET') {
-        const to = url.searchParams.get('to');
-        const message = url.searchParams.get('message');
+// ============ EXPRESS ROUTES ============
+
+// Public Routes
+app.get('/login', (req, res) => {
+    res.render('login');
+});
+
+// Auth Routes (tanpa API key)
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        const { username, password } = req.body;
         
-        if (!to || !message) {
-            res.writeHead(400);
-            res.end(JSON.stringify({ 
-                status: false, 
-                error: 'Parameter "to" dan "message" wajib diisi' 
-            }));
-            return;
+        if (!username || !password) {
+            return res.status(400).json({
+                success: false,
+                error: 'Username dan password wajib diisi'
+            });
         }
         
-        try {
-            const result = await sendTextMessage(to, message);
-            res.writeHead(200);
-            res.end(JSON.stringify({ 
-                status: true, 
-                message: 'Pesan terkirim',
-                to: to,
-                result: result 
-            }));
-        } catch (err) {
-            res.writeHead(500);
-            res.end(JSON.stringify({ 
-                status: false, 
-                error: err.message 
-            }));
-        }
-        return;
-    }
-    
-    // ENDPOINT: KIRIM GAMBAR
-    if (pathname === '/send-image' && req.method === 'GET') {
-        const to = url.searchParams.get('to');
-        const image = url.searchParams.get('image');
-        const caption = url.searchParams.get('caption') || '';
+        const result = await login(username, password);
         
-        if (!to || !image) {
-            res.writeHead(400);
-            res.end(JSON.stringify({ 
-                status: false, 
-                error: 'Parameter "to" dan "image" wajib diisi' 
-            }));
-            return;
-        }
-        
-        try {
-            const result = await sendImageMessage(to, image, caption);
-            res.writeHead(200);
-            res.end(JSON.stringify({ 
-                status: true, 
-                message: 'Gambar terkirim',
-                to: to,
-                result: result 
-            }));
-        } catch (err) {
-            res.writeHead(500);
-            res.end(JSON.stringify({ 
-                status: false, 
-                error: err.message 
-            }));
-        }
-        return;
-    }
-    
-    // ENDPOINT: KIRIM DOKUMEN
-    if (pathname === '/send-document' && req.method === 'GET') {
-        const to = url.searchParams.get('to');
-        const document = url.searchParams.get('document');
-        const filename = url.searchParams.get('filename') || 'document';
-        const caption = url.searchParams.get('caption') || '';
-        
-        if (!to || !document) {
-            res.writeHead(400);
-            res.end(JSON.stringify({ 
-                status: false, 
-                error: 'Parameter "to" dan "document" wajib diisi' 
-            }));
-            return;
-        }
-        
-        try {
-            const result = await sendDocumentMessage(to, document, filename, caption);
-            res.writeHead(200);
-            res.end(JSON.stringify({ 
-                status: true, 
-                message: 'Dokumen terkirim',
-                to: to,
-                result: result 
-            }));
-        } catch (err) {
-            res.writeHead(500);
-            res.end(JSON.stringify({ 
-                status: false, 
-                error: err.message 
-            }));
-        }
-        return;
-    }
-    
-    // ENDPOINT: CEK STATUS
-    if (pathname === '/status') {
-        res.writeHead(200);
-        res.end(JSON.stringify({ 
-            status: true,
-            connected: isConnected, 
-            user: sock?.user?.id || null,
-            registered: sock?.authState?.creds?.registered || false,
-            uptime: process.uptime()
-        }));
-        return;
-    }
-    
-    // ENDPOINT: PAIRING CODE (manual)
-    if (pathname === '/pair' && req.method === 'GET') {
-        const phone = url.searchParams.get('phone');
-        
-        if (!phone) {
-            res.writeHead(400);
-            res.end(JSON.stringify({ 
-                status: false, 
-                error: 'Parameter "phone" wajib diisi (contoh: 6281234567890)' 
-            }));
-            return;
-        }
-        
-        if (!sock) {
-            res.writeHead(503);
-            res.end(JSON.stringify({ 
-                status: false, 
-                error: 'Socket belum siap. Tunggu sebentar.' 
-            }));
-            return;
-        }
-        
-        try {
-            const cleanNumber = phone.replace(/\D/g, '');
-            const code = await sock.requestPairingCode(cleanNumber);
-            const formattedCode = code?.match(/.{1,4}/g)?.join("-") || code;
+        if (result.success) {
+            // Set session
+            req.session.isAuthenticated = true;
+            req.session.user = result.user;
             
-            res.writeHead(200);
-            res.end(JSON.stringify({ 
-                status: true, 
-                message: 'Pairing code berhasil dibuat',
-                pairing_code: formattedCode,
-                phone: cleanNumber
-            }));
-        } catch (err) {
-            res.writeHead(500);
-            res.end(JSON.stringify({ 
-                status: false, 
-                error: err.message 
-            }));
+            res.json({
+                success: true,
+                message: 'Login berhasil',
+                user: result.user
+            });
+        } else {
+            res.status(401).json({
+                success: false,
+                error: result.error
+            });
         }
-        return;
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: 'Terjadi kesalahan pada server'
+        });
+    }
+});
+
+app.post('/api/auth/logout', (req, res) => {
+    req.session.destroy((err) => {
+        if (err) {
+            return res.status(500).json({
+                success: false,
+                error: 'Gagal logout'
+            });
+        }
+        res.json({
+            success: true,
+            message: 'Logout berhasil'
+        });
+    });
+});
+
+app.get('/api/auth/check', (req, res) => {
+    if (req.session && req.session.isAuthenticated) {
+        res.json({
+            authenticated: true,
+            user: req.session.user
+        });
+    } else {
+        res.json({
+            authenticated: false
+        });
+    }
+});
+
+// Protected Routes - Dashboard (butuh session auth)
+app.get('/dashboard', requireAuth, (req, res) => {
+    res.render('dashboard', {
+        user: req.session.user
+    });
+});
+
+app.get('/', (req, res) => {
+    if (req.session && req.session.isAuthenticated) {
+        res.redirect('/dashboard');
+    } else {
+        res.redirect('/login');
+    }
+});
+
+// API: Kirim Pesan Teks (butuh API key)
+app.get('/api/send-text', verifyApiKey, async (req, res) => {
+    const { to, message } = req.query;
+
+    if (!to || !message) {
+        return res.status(400).json({
+            status: false,
+            error: 'Parameter "to" dan "message" wajib diisi'
+        });
+    }
+
+    try {
+        const result = await sendTextMessage(to, message);
+        res.json({
+            status: true,
+            message: 'Pesan terkirim',
+            to: to,
+            result: result
+        });
+    } catch (err) {
+        res.status(500).json({
+            status: false,
+            error: err.message
+        });
+    }
+});
+
+// API: Kirim Gambar (butuh API key)
+app.get('/api/send-image', verifyApiKey, async (req, res) => {
+    const { to, image, caption } = req.query;
+
+    if (!to || !image) {
+        return res.status(400).json({
+            status: false,
+            error: 'Parameter "to" dan "image" wajib diisi'
+        });
+    }
+
+    try {
+        const result = await sendImageMessage(to, image, caption || '');
+        res.json({
+            status: true,
+            message: 'Gambar terkirim',
+            to: to,
+            result: result
+        });
+    } catch (err) {
+        res.status(500).json({
+            status: false,
+            error: err.message
+        });
+    }
+});
+
+// API: Kirim Dokumen (butuh API key)
+app.get('/api/send-document', verifyApiKey, async (req, res) => {
+    const { to, document, filename, caption } = req.query;
+
+    if (!to || !document) {
+        return res.status(400).json({
+            status: false,
+            error: 'Parameter "to" dan "document" wajib diisi'
+        });
+    }
+
+    try {
+        const result = await sendDocumentMessage(to, document, filename || 'document', caption || '');
+        res.json({
+            status: true,
+            message: 'Dokumen terkirim',
+            to: to,
+            result: result
+        });
+    } catch (err) {
+        res.status(500).json({
+            status: false,
+            error: err.message
+        });
+    }
+});
+
+// API: Cek Status (public untuk dashboard, tapi butuh session atau API key)
+app.get('/api/status', (req, res) => {
+    // Cek apakah ada session valid ATAU API key
+    const hasSession = req.session && req.session.isAuthenticated;
+    const apiKey = req.headers['x-api-key'] || req.query.api_key;
+    const hasApiKey = apiKey === API_KEY;
+    
+    // Izinkan jika punya session ATAU API key
+    if (!hasSession && !hasApiKey) {
+        return res.status(401).json({
+            status: false,
+            error: 'Authentication required. Login atau gunakan API key.'
+        });
     }
     
-    // ENDPOINT: LOGOUT
-    if (pathname === '/logout' && req.method === 'GET') {
-        try {
-            if (sock) {
-                await sock.logout();
+    // Determine registration status dari berbagai kemungkinan path
+    let registered = false;
+    if (sock) {
+        registered = !!(
+            sock.authState?.creds?.registered ||
+            sock.authState?.creds?.me ||
+            sock.user?.id
+        );
+    }
+    
+    res.json({
+        status: true,
+        connected: isConnected,
+        user: sock?.user?.id || sock?.authState?.creds?.me?.id || null,
+        registered: registered,
+        uptime: process.uptime()
+    });
+});
+
+// API: Pairing Code (butuh API key)
+app.get('/api/pair', verifyApiKey, async (req, res) => {
+    const { phone } = req.query;
+
+    if (!phone) {
+        return res.status(400).json({
+            status: false,
+            error: 'Parameter "phone" wajib diisi (contoh: 6281234567890)'
+        });
+    }
+
+    if (!sock) {
+        return res.status(503).json({
+            status: false,
+            error: 'Socket belum siap. Tunggu sebentar.'
+        });
+    }
+
+    try {
+        const cleanNumber = phone.replace(/\D/g, '');
+        const code = await sock.requestPairingCode(cleanNumber);
+        const formattedCode = code?.match(/.{1,4}/g)?.join("-") || code;
+
+        res.json({
+            status: true,
+            message: 'Pairing code berhasil dibuat',
+            pairing_code: formattedCode,
+            phone: cleanNumber
+        });
+    } catch (err) {
+        res.status(500).json({
+            status: false,
+            error: err.message
+        });
+    }
+});
+
+// API: Get QR Code (butuh API key)
+app.get('/api/qr', verifyApiKey, async (req, res) => {
+    const QRCode = await import('qrcode');
+    
+    if (!currentQR) {
+        return res.status(404).json({
+            status: false,
+            error: 'QR Code belum tersedia. Tunggu beberapa saat atau request pairing code terlebih dahulu.'
+        });
+    }
+
+    try {
+        // Convert QR code string ke base64 image
+        const qrImage = await QRCode.toDataURL(currentQR, {
+            width: 300,
+            margin: 2,
+            color: {
+                dark: '#075E54',
+                light: '#FFFFFF'
             }
-            res.writeHead(200);
-            res.end(JSON.stringify({ 
-                status: true, 
-                message: 'Logout berhasil. Hapus folder auth_info_baileys untuk reset total.' 
-            }));
-        } catch (err) {
-            res.writeHead(500);
-            res.end(JSON.stringify({ 
-                status: false, 
-                error: err.message 
-            }));
-        }
-        return;
+        });
+
+        res.json({
+            status: true,
+            qr_code: qrImage,
+            message: 'QR code berhasil di-generate'
+        });
+    } catch (err) {
+        res.status(500).json({
+            status: false,
+            error: err.message
+        });
     }
-    
-    // ROOT ENDPOINT (Dokumentasi)
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end(`
-╔══════════════════════════════════════════════════════════════════╗
-║                    WhatsApp API - Baileys v7                     ║
-╠══════════════════════════════════════════════════════════════════╣
-║                                                                  ║
-║  📤 KIRIM PESAN TEKS:                                            ║
-║     GET /send-text?to=628xxx&message=Halo                       ║
-║                                                                  ║
-║  🖼️ KIRIM GAMBAR:                                                ║
-║     GET /send-image?to=628xxx&image=URL&caption=Pesan           ║
-║                                                                  ║
-║  📎 KIRIM DOKUMEN:                                               ║
-║     GET /send-document?to=628xxx&document=/path/file.pdf        ║
-║                                                                  ║
-║  🔑 PAIRING CODE (manual):                                       ║
-║     GET /pair?phone=628xxx                                      ║
-║                                                                  ║
-║  📊 CEK STATUS:                                                  ║
-║     GET /status                                                 ║
-║                                                                  ║
-║  🚪 LOGOUT:                                                      ║
-║     GET /logout                                                 ║
-║                                                                  ║
-╚══════════════════════════════════════════════════════════════════╝
-    `);
+});
+
+// API: Logout WhatsApp (butuh API key)
+app.get('/api/logout', verifyApiKey, async (req, res) => {
+    try {
+        if (sock) {
+            await sock.logout();
+        }
+        res.json({
+            status: true,
+            message: 'Logout berhasil. Hapus folder auth_info_baileys untuk reset total.'
+        });
+    } catch (err) {
+        res.status(500).json({
+            status: false,
+            error: err.message
+        });
+    }
 });
 
 // ============ START SERVER ============
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
+app.listen(PORT, () => {
     console.log(`\n🌐 HTTP Server berjalan di http://localhost:${PORT}`);
-    console.log(`📋 Dokumentasi API: http://localhost:${PORT}\n`);
+    console.log(`📋 Dashboard: http://localhost:${PORT}\n`);
 });
 
 // ============ START WHATSAPP CONNECTION ============
