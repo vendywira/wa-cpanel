@@ -322,11 +322,16 @@ async function connectToWhatsApp() {
                     return;
                 }
                 
-                // Handle loggedOut
+                // Handle loggedOut — hapus auth folder dan reconnect fresh
                 if (statusCode === DisconnectReason.loggedOut) {
-                    console.log('❌ Session logout!');
-                    console.log('Silakan hapus folder "auth_info_baileys" dan jalankan ulang.\n');
-                    process.exit(1);
+                    console.log('🔑 Session logout — membersihkan data autentikasi...');
+                    if (fs.existsSync('auth_info_baileys')) {
+                        fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+                        console.log('🗑️ Folder auth_info_baileys dihapus');
+                    }
+                    pairingRequested = false;
+                    console.log('🔄 Siap untuk pairing ulang...');
+                    setTimeout(connectToWhatsApp, 3000);
                     return;
                 }
                 
@@ -443,10 +448,10 @@ app.get('/api/auth/check', (req, res) => {
     }
 });
 
-// Protected Routes - Dashboard (butuh session auth)
+// Protected Routes - Dashboard (butuh session login, API key otomatis dari .env)
 app.get('/dashboard', requireAuth, (req, res) => {
     res.render('dashboard', {
-        user: req.session.user
+        apiKey: API_KEY
     });
 });
 
@@ -651,9 +656,13 @@ app.get('/api/logout', verifyApiKey, async (req, res) => {
         if (sock) {
             await sock.logout();
         }
+
+        // Note: Folder auth_info_baileys akan dihapus otomatis
+        // oleh connection handler saat mendapat DisconnectReason.loggedOut
+
         res.json({
             status: true,
-            message: 'Logout berhasil. Hapus folder auth_info_baileys untuk reset total.'
+            message: 'Logout berhasil. Session akan dibersihkan secara otomatis.'
         });
     } catch (err) {
         res.status(500).json({
