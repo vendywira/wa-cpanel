@@ -855,7 +855,7 @@
         // Update connection status periodically
         async function updateStatus() {
             try {
-                var response = await fetch('/api/status');
+                var response = await fetch('/api/status', { credentials: 'same-origin' });
 
                 if (!response.ok) {
                     console.error('Status fetch failed:', response.status);
@@ -890,7 +890,7 @@
 
             try {
                 var phone = document.getElementById('pairPhone').value;
-                var response = await fetch('/api/pair?phone=' + encodeURIComponent(phone));
+                var response = await fetch('/api/pair?phone=' + encodeURIComponent(phone), { credentials: 'same-origin' });
 
                 if (!response.ok) {
                     var errorData;
@@ -932,7 +932,7 @@
             setLoading('qrBtn', true);
 
             try {
-                var response = await fetch('/api/qr');
+                var response = await fetch('/api/qr', { credentials: 'same-origin' });
 
                 if (!response.ok) {
                     var errorData;
@@ -1023,7 +1023,7 @@
             btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Refreshing...';
 
             try {
-                var response = await fetch('/api/qr');
+                var response = await fetch('/api/qr', { credentials: 'same-origin' });
 
                 if (!response.ok) {
                     var errorData;
@@ -1060,7 +1060,7 @@
             try {
                 var to = document.getElementById('textTo').value;
                 var message = document.getElementById('textMessage').value;
-                var response = await fetch('/api/send-text?to=' + encodeURIComponent(to) + '&message=' + encodeURIComponent(message));
+                var response = await fetch('/api/send-text?to=' + encodeURIComponent(to) + '&message=' + encodeURIComponent(message), { credentials: 'same-origin' });
 
                 if (!response.ok) {
                     var errorData;
@@ -1098,7 +1098,7 @@
                 var to = document.getElementById('imageTo').value;
                 var image = document.getElementById('imageUrl').value;
                 var caption = document.getElementById('imageCaption').value;
-                var response = await fetch('/api/send-image?to=' + encodeURIComponent(to) + '&image=' + encodeURIComponent(image) + '&caption=' + encodeURIComponent(caption));
+                var response = await fetch('/api/send-image?to=' + encodeURIComponent(to) + '&image=' + encodeURIComponent(image) + '&caption=' + encodeURIComponent(caption), { credentials: 'same-origin' });
 
                 if (!response.ok) {
                     var errorData;
@@ -1138,7 +1138,7 @@
                 var documentPath = document.getElementById('documentPath').value;
                 var filename = document.getElementById('documentFilename').value;
                 var caption = document.getElementById('documentCaption').value;
-                var response = await fetch('/api/send-document?to=' + encodeURIComponent(to) + '&document=' + encodeURIComponent(documentPath) + '&filename=' + encodeURIComponent(filename) + '&caption=' + encodeURIComponent(caption));
+                var response = await fetch('/api/send-document?to=' + encodeURIComponent(to) + '&document=' + encodeURIComponent(documentPath) + '&filename=' + encodeURIComponent(filename) + '&caption=' + encodeURIComponent(caption), { credentials: 'same-origin' });
 
                 if (!response.ok) {
                     var errorData;
@@ -1179,7 +1179,7 @@
                 btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Disconnecting...';
             }
 
-            fetch('/api/auth/logout', { method: 'POST' })
+            fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' })
                 .then(function(response) {
                     if (response.ok) {
                         window.location.href = '/login';
