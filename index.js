@@ -65,12 +65,42 @@ const rl = readline.createInterface({
 });
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
+// ============ FUNGSI AUTO CONNECT ============
+/**
+ * Pastikan socket terhubung sebelum mengirim pesan.
+ * Jika socket ada tapi tidak dalam keadaan open, tunggu sampai connected.
+ */
+async function ensureConnected(maxWaitMs = 15000) {
+    // Jika sudah connected, langsung return
+    if (isConnected && sock) return;
+
+    console.log('⏳ Menunggu koneksi WhatsApp...');
+    const startTime = Date.now();
+    const checkInterval = 500; // Cek setiap 500ms
+
+    while (Date.now() - startTime < maxWaitMs) {
+        if (isConnected && sock) {
+            console.log('✅ Koneksi WhatsApp pulih');
+            return;
+        }
+        await new Promise(resolve => setTimeout(resolve, checkInterval));
+    }
+
+    throw new Error('Gagal menghubungkan ke WhatsApp setelah menunggu');
+}
+
 // ============ FUNGSI KIRIM PESAN TEKS ============
 export async function sendTextMessage(phoneNumber, message) {
-    if (!isConnected || !sock) {
-        throw new Error('WhatsApp belum terhubung');
+    if (!sock || !sock.authState?.creds?.registered) {
+        throw new Error('WhatsApp belum terhubung atau belum terautentikasi');
     }
-    
+
+    // Auto-reconnect jika socket tidak dalam keadaan open
+    if (!isConnected) {
+        console.log('⚠️ Socket tidak open, mencoba reconnect...');
+        await ensureConnected();
+    }
+
     let jid = phoneNumber;
     if (!jid.includes('@')) {
         let cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
@@ -82,12 +112,12 @@ export async function sendTextMessage(phoneNumber, message) {
         }
         jid = `${cleanNumber}@s.whatsapp.net`;
     }
-    
+
     const [exists] = await sock.onWhatsApp(jid);
     if (!exists || !exists.exists) {
         throw new Error(`Nomor ${phoneNumber} tidak terdaftar di WhatsApp`);
     }
-    
+
     const result = await sock.sendMessage(exists.jid, { text: message });
     console.log(`✅ Pesan terkirim ke ${phoneNumber}: ${message}`);
     return result;
@@ -95,10 +125,16 @@ export async function sendTextMessage(phoneNumber, message) {
 
 // ============ FUNGSI KIRIM GAMBAR ============
 export async function sendImageMessage(phoneNumber, imageSource, caption = '') {
-    if (!isConnected || !sock) {
-        throw new Error('WhatsApp belum terhubung');
+    if (!sock || !sock.authState?.creds?.registered) {
+        throw new Error('WhatsApp belum terhubung atau belum terautentikasi');
     }
-    
+
+    // Auto-reconnect jika socket tidak dalam keadaan open
+    if (!isConnected) {
+        console.log('⚠️ Socket tidak open, mencoba reconnect...');
+        await ensureConnected();
+    }
+
     let jid = phoneNumber;
     if (!jid.includes('@')) {
         let cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
@@ -110,12 +146,12 @@ export async function sendImageMessage(phoneNumber, imageSource, caption = '') {
         }
         jid = `${cleanNumber}@s.whatsapp.net`;
     }
-    
+
     const [exists] = await sock.onWhatsApp(jid);
     if (!exists || !exists.exists) {
         throw new Error(`Nomor ${phoneNumber} tidak terdaftar di WhatsApp`);
     }
-    
+
     let imageData;
     if (typeof imageSource === 'string') {
         if (imageSource.startsWith('http://') || imageSource.startsWith('https://')) {
@@ -130,22 +166,28 @@ export async function sendImageMessage(phoneNumber, imageSource, caption = '') {
     } else {
         throw new Error('Image source harus URL, path file, atau buffer');
     }
-    
+
     const result = await sock.sendMessage(exists.jid, {
         image: imageData,
         caption: caption
     });
-    
+
     console.log(`✅ Gambar terkirim ke ${phoneNumber}${caption ? `: ${caption}` : ''}`);
     return result;
 }
 
 // ============ FUNGSI KIRIM DOKUMEN ============
 export async function sendDocumentMessage(phoneNumber, documentPath, fileName, caption = '') {
-    if (!isConnected || !sock) {
-        throw new Error('WhatsApp belum terhubung');
+    if (!sock || !sock.authState?.creds?.registered) {
+        throw new Error('WhatsApp belum terhubung atau belum terautentikasi');
     }
-    
+
+    // Auto-reconnect jika socket tidak dalam keadaan open
+    if (!isConnected) {
+        console.log('⚠️ Socket tidak open, mencoba reconnect...');
+        await ensureConnected();
+    }
+
     let jid = phoneNumber;
     if (!jid.includes('@')) {
         let cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
@@ -550,7 +592,7 @@ app.get('/api/status', (req, res) => {
     const hasSession = req.session && req.session.isAuthenticated;
     const apiKey = req.headers['x-api-key'] || req.query.api_key;
     const hasApiKey = apiKey === API_KEY;
-    
+
     // Izinkan jika punya session ATAU API key
     if (!hasSession && !hasApiKey) {
         return res.status(401).json({
@@ -558,22 +600,20 @@ app.get('/api/status', (req, res) => {
             error: 'Authentication required. Login atau gunakan API key.'
         });
     }
-    
-    // Determine registration status dari berbagai kemungkinan path
+
+    // Cek koneksi berdasarkan auth credentials (lebih reliable dari isConnected flag)
+    let connected = false;
     let registered = false;
-    if (sock) {
-        registered = !!(
-            sock.authState?.creds?.registered ||
-            sock.authState?.creds?.me ||
-            sock.user?.id
-        );
+    if (sock && sock.authState?.creds) {
+        registered = !!(sock.authState.creds.registered || sock.authState.creds.me);
+        connected = isConnected && registered;
     }
-    
+
     res.json({
         status: true,
-        connected: isConnected,
-        user: sock?.user?.id || sock?.authState?.creds?.me?.id || null,
+        connected: connected,
         registered: registered,
+        user: sock?.user?.id || sock?.authState?.creds?.me?.id || null,
         uptime: process.uptime()
     });
 });
