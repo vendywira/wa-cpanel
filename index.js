@@ -65,28 +65,196 @@ const rl = readline.createInterface({
 });
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
-// ============ FUNGSI AUTO CONNECT ============
+// ============ EVENT HANDLER UNTUK SOCKET ============
 /**
- * Pastikan socket terhubung sebelum mengirim pesan.
- * Jika socket ada tapi tidak dalam keadaan open, tunggu sampai connected.
+ * Setup semua event handler untuk socket (connection.update, creds.update, messages.upsert).
+ * Bisa dipanggil di connectToWhatsApp() maupun di ensureConnected().
  */
-async function ensureConnected(maxWaitMs = 15000) {
-    // Jika sudah connected, langsung return
-    if (isConnected && sock) return;
+function setupSocketEvents(socket, saveCreds) {
+    // Credential updates
+    socket.ev.on('creds.update', saveCreds);
 
-    console.log('⏳ Menunggu koneksi WhatsApp...');
-    const startTime = Date.now();
-    const checkInterval = 500; // Cek setiap 500ms
+    // Connection state changes
+    socket.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect, qr } = update;
 
-    while (Date.now() - startTime < maxWaitMs) {
-        if (isConnected && sock) {
-            console.log('✅ Koneksi WhatsApp pulih');
-            return;
+        if (qr) {
+            currentQR = qr;
+            console.log('\n📱 QR Code telah di-generate');
         }
-        await new Promise(resolve => setTimeout(resolve, checkInterval));
+
+        if (qr && !socket.authState.creds.registered && !pairingRequested) {
+            console.log('\n📱 QR Code tersedia (metode alternatif)');
+            console.log('Jika pairing code bermasalah, scan QR ini dengan WhatsApp\n');
+        }
+
+        if ((connection === 'connecting' || qr) && !socket.authState.creds.registered && !pairingRequested) {
+            pairingRequested = true;
+
+            console.log('⏳ Menghubungkan ke server WhatsApp...\n');
+            await new Promise(resolve => setTimeout(resolve, 2000));
+
+            const phoneNumber = await question('📱 Masukkan nomor WhatsApp Anda (contoh: 6281234567890): ');
+
+            if (!phoneNumber) {
+                console.log('❌ Nomor tidak boleh kosong! Keluar...');
+                process.exit(1);
+            }
+
+            try {
+                const cleanNumber = phoneNumber.replace(/\D/g, '');
+                console.log(`\n⏳ Meminta pairing code untuk: ${cleanNumber}...`);
+
+                const code = await socket.requestPairingCode(cleanNumber);
+                const formattedCode = code?.match(/.{1,4}/g)?.join("-") || code;
+
+                console.log('\n╔══════════════════════════════════════════════════════════════╗');
+                console.log(`║                    🔑 PAIRING CODE: ${formattedCode.padEnd(20)}║`);
+                console.log('╚══════════════════════════════════════════════════════════════╝');
+                console.log('\n📝 Cara menggunakan:');
+                console.log('   1. Buka WhatsApp di HP');
+                console.log('   2. Settings (Pengaturan) → Perangkat Tertaut');
+                console.log('   3. Tap "Tautkan Perangkat"');
+                console.log(`   4. Masukkan kode: ${formattedCode}`);
+                console.log('\n⏰ Kode berlaku sekitar 2-3 menit. Anda memiliki waktu yang cukup.\n');
+
+            } catch (err) {
+                console.error('❌ Gagal meminta pairing code:', err.message);
+                pairingRequested = false;
+            }
+        }
+
+        if (connection === 'open') {
+            isConnected = true;
+            reconnectAttempts = 0;
+            console.log('\n╔══════════════════════════════════════════════════════════════╗');
+            console.log('║                    ✅ WHATSAPP TERHUBUNG!                    ║');
+            console.log(`║  📱 Nomor: ${(socket.user?.id || 'Unknown').padEnd(44)}║`);
+            console.log('╚══════════════════════════════════════════════════════════════╝');
+            console.log('\n🚀 API siap digunakan!\n');
+        }
+
+        if (connection === 'close') {
+            isConnected = false;
+
+            let statusCode = null;
+            if (lastDisconnect && lastDisconnect.error && lastDisconnect.error.output) {
+                statusCode = lastDisconnect.error.output.statusCode;
+            }
+
+            console.log(`\n⚠️ Koneksi terputus. Status code: ${statusCode || 'unknown'}`);
+
+            if (statusCode === 405) {
+                console.log('🔄 Error 405: Versi protocol tidak kompatibel');
+                console.log('🗑️ Menghapus session lama dan mencoba ulang...');
+
+                if (fs.existsSync('auth_info_baileys')) {
+                    fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+                }
+                pairingRequested = false;
+                setTimeout(connectToWhatsApp, 3000);
+                return;
+            }
+
+            if (statusCode === DisconnectReason.restartRequired) {
+                console.log('🔄 Restart required, melanjutkan koneksi...');
+                setTimeout(connectToWhatsApp, 2000);
+                return;
+            }
+
+            if (statusCode === DisconnectReason.loggedOut) {
+                console.log('🔑 Session logout — membersihkan data autentikasi...');
+                if (fs.existsSync('auth_info_baileys')) {
+                    fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+                    console.log('🗑️ Folder auth_info_baileys dihapus');
+                }
+                pairingRequested = false;
+                console.log('🔄 Siap untuk pairing ulang...');
+                setTimeout(connectToWhatsApp, 3000);
+                return;
+            }
+
+            if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                reconnectAttempts++;
+                const delay = Math.min(5000 * Math.pow(1.5, reconnectAttempts - 1), 60000);
+                console.log(`🔄 Mencoba reconnect dalam ${Math.round(delay/1000)} detik... (Percobaan ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
+                setTimeout(connectToWhatsApp, delay);
+            } else {
+                console.log('❌ Maksimal percobaan reconnect tercapai.');
+                console.log('Silakan restart script secara manual.\n');
+            }
+        }
+    });
+
+    // Event untuk pesan masuk (opsional, untuk logging)
+    socket.ev.on('messages.upsert', async ({ messages, type }) => {
+        if (type === 'notify' && !messages[0].key.fromMe) {
+            const msg = messages[0];
+            const from = msg.key.remoteJid;
+            let text = '';
+            if (msg.message?.conversation) {
+                text = msg.message.conversation;
+            } else if (msg.message?.extendedTextMessage?.text) {
+                text = msg.message.extendedTextMessage.text;
+            } else {
+                text = '(pesan non-teks)';
+            }
+            console.log(`📨 Pesan masuk dari ${from}: ${text.substring(0, 50)}`);
+        }
+    });
+}
+
+/**
+ * Pastikan socket siap mengirim pesan.
+ * Jika tidak connected, buat socket baru pakai auth yang sudah ada (auto reconnect).
+ */
+async function ensureConnected() {
+    if (isConnected && sock) {
+        return;
     }
 
-    throw new Error('Gagal menghubungkan ke WhatsApp setelah menunggu');
+    console.log('⚠️ Socket tidak open, mencoba reconnect dengan auth yang ada...');
+
+    try {
+        if (sock) {
+            try { await sock.end(undefined); } catch (e) { /* ignore */ }
+            sock = null;
+        }
+
+        const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+
+        sock = makeWASocket({
+            auth: {
+                creds: state.creds,
+                keys: makeCacheableSignalKeyStore(state.keys, logger)
+            },
+            logger: P({ level: 'silent' }),
+            browser: Browsers.macOS('Chrome'),
+            printQRInTerminal: false,
+            markOnlineOnConnect: false,
+            syncFullHistory: false,
+            connectTimeoutMs: 30000,
+            defaultQueryTimeoutMs: 30000,
+            keepAliveIntervalMs: 25000,
+        });
+
+        setupSocketEvents(sock, saveCreds);
+
+        const maxWait = 15000;
+        const startTime = Date.now();
+        while (Date.now() - startTime < maxWait) {
+            if (isConnected) {
+                console.log('✅ Reconnect berhasil');
+                return;
+            }
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+
+        throw new Error('Timeout: tidak bisa connect setelah 15 detik');
+    } catch (err) {
+        console.error('❌ Reconnect gagal:', err.message);
+        throw new Error('Gagal menghubungkan ke WhatsApp: ' + err.message);
+    }
 }
 
 // ============ FUNGSI KIRIM PESAN TEKS ============
@@ -95,7 +263,6 @@ export async function sendTextMessage(phoneNumber, message) {
         throw new Error('WhatsApp belum terhubung atau belum terautentikasi');
     }
 
-    // Auto-reconnect jika socket tidak dalam keadaan open
     if (!isConnected) {
         console.log('⚠️ Socket tidak open, mencoba reconnect...');
         await ensureConnected();
@@ -241,15 +408,15 @@ async function connectToWhatsApp() {
     console.log('\n╔══════════════════════════════════════════════════════════════╗');
     console.log('║           WhatsApp API - Baileys v7 (Auto Version)           ║');
     console.log('╚══════════════════════════════════════════════════════════════╝\n');
-    
+
     try {
         // Ambil versi terbaru dari WhatsApp
         const { version, isLatest } = await fetchLatestBaileysVersion();
         console.log(`📱 Versi WhatsApp API: ${version.join('.')} ${isLatest ? '(terbaru)' : '(update tersedia)'}`);
-        
+
         // Load atau buat session
         const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
-        
+
         // Buat socket connection
         sock = makeWASocket({
             auth: {
@@ -267,149 +434,10 @@ async function connectToWhatsApp() {
             keepAliveIntervalMs: 25000,
             generateHighQualityLinkPreview: true
         });
-        
-        // ============ EVENT HANDLER ============
-        sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect, qr } = update;
 
-            // Simpan QR code terbaru
-            if (qr) {
-                currentQR = qr;
-                console.log('\n📱 QR Code telah di-generate');
-            }
+        // Gunakan fungsi event handler yang sama dengan ensureConnected
+        setupSocketEvents(sock, saveCreds);
 
-            // Tampilkan QR jika ada (fallback method)
-            if (qr && !sock.authState.creds.registered && !pairingRequested) {
-                console.log('\n📱 QR Code tersedia (metode alternatif)');
-                console.log('Jika pairing code bermasalah, scan QR ini dengan WhatsApp\n');
-            }
-            
-            // PAIRING CODE - Request saat koneksi connecting
-            if ((connection === 'connecting' || qr) && !sock.authState.creds.registered && !pairingRequested) {
-                pairingRequested = true;
-                
-                console.log('⏳ Menghubungkan ke server WhatsApp...\n');
-                await new Promise(resolve => setTimeout(resolve, 2000));
-                
-                const phoneNumber = await question('📱 Masukkan nomor WhatsApp Anda (contoh: 6281234567890): ');
-                
-                if (!phoneNumber) {
-                    console.log('❌ Nomor tidak boleh kosong! Keluar...');
-                    process.exit(1);
-                }
-                
-                try {
-                    const cleanNumber = phoneNumber.replace(/\D/g, '');
-                    console.log(`\n⏳ Meminta pairing code untuk: ${cleanNumber}...`);
-                    
-                    const code = await sock.requestPairingCode(cleanNumber);
-                    const formattedCode = code?.match(/.{1,4}/g)?.join("-") || code;
-                    
-                    console.log('\n╔══════════════════════════════════════════════════════════════╗');
-                    console.log(`║                    🔑 PAIRING CODE: ${formattedCode.padEnd(20)}║`);
-                    console.log('╚══════════════════════════════════════════════════════════════╝');
-                    console.log('\n📝 Cara menggunakan:');
-                    console.log('   1. Buka WhatsApp di HP');
-                    console.log('   2. Settings (Pengaturan) → Perangkat Tertaut');
-                    console.log('   3. Tap "Tautkan Perangkat"');
-                    console.log(`   4. Masukkan kode: ${formattedCode}`);
-                    console.log('\n⏰ Kode berlaku sekitar 2-3 menit. Anda memiliki waktu yang cukup.\n');
-                    
-                } catch (err) {
-                    console.error('❌ Gagal meminta pairing code:', err.message);
-                    pairingRequested = false;
-                }
-            }
-            
-            // KONEKSI BERHASIL
-            if (connection === 'open') {
-                isConnected = true;
-                reconnectAttempts = 0;
-                console.log('\n╔══════════════════════════════════════════════════════════════╗');
-                console.log('║                    ✅ WHATSAPP TERHUBUNG!                    ║');
-                console.log(`║  📱 Nomor: ${(sock.user?.id || 'Unknown').padEnd(44)}║`);
-                console.log('╚══════════════════════════════════════════════════════════════╝');
-                console.log('\n🚀 API siap digunakan!\n');
-            }
-            
-            // KONEKSI TERPUTUS
-            if (connection === 'close') {
-                isConnected = false;
-                
-                // AMAN: Ambil status code tanpa TypeScript 'as'
-                let statusCode = null;
-                if (lastDisconnect && lastDisconnect.error && lastDisconnect.error.output) {
-                    statusCode = lastDisconnect.error.output.statusCode;
-                }
-                
-                console.log(`\n⚠️ Koneksi terputus. Status code: ${statusCode || 'unknown'}`);
-                
-                // Handle error 405 (version mismatch)
-                if (statusCode === 405) {
-                    console.log('🔄 Error 405: Versi protocol tidak kompatibel');
-                    console.log('🗑️ Menghapus session lama dan mencoba ulang...');
-                    
-                    if (fs.existsSync('auth_info_baileys')) {
-                        fs.rmSync('auth_info_baileys', { recursive: true, force: true });
-                    }
-                    pairingRequested = false;
-                    setTimeout(connectToWhatsApp, 3000);
-                    return;
-                }
-                
-                // Handle restartRequired (normal setelah pairing/scan)
-                if (statusCode === DisconnectReason.restartRequired) {
-                    console.log('🔄 Restart required, melanjutkan koneksi...');
-                    setTimeout(connectToWhatsApp, 2000);
-                    return;
-                }
-                
-                // Handle loggedOut — hapus auth folder dan reconnect fresh
-                if (statusCode === DisconnectReason.loggedOut) {
-                    console.log('🔑 Session logout — membersihkan data autentikasi...');
-                    if (fs.existsSync('auth_info_baileys')) {
-                        fs.rmSync('auth_info_baileys', { recursive: true, force: true });
-                        console.log('🗑️ Folder auth_info_baileys dihapus');
-                    }
-                    pairingRequested = false;
-                    console.log('🔄 Siap untuk pairing ulang...');
-                    setTimeout(connectToWhatsApp, 3000);
-                    return;
-                }
-                
-                // Handle connection lost dengan exponential backoff
-                if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-                    reconnectAttempts++;
-                    const delay = Math.min(5000 * Math.pow(1.5, reconnectAttempts - 1), 60000);
-                    console.log(`🔄 Mencoba reconnect dalam ${Math.round(delay/1000)} detik... (Percobaan ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
-                    setTimeout(connectToWhatsApp, delay);
-                } else {
-                    console.log('❌ Maksimal percobaan reconnect tercapai.');
-                    console.log('Silakan restart script secara manual.\n');
-                }
-            }
-        });
-        
-        // Simpan kredensial saat ada update
-        sock.ev.on('creds.update', saveCreds);
-        
-        // Event untuk pesan masuk (opsional, untuk logging)
-        sock.ev.on('messages.upsert', async ({ messages, type }) => {
-            if (type === 'notify' && !messages[0].key.fromMe) {
-                const msg = messages[0];
-                const from = msg.key.remoteJid;
-                let text = '';
-                if (msg.message?.conversation) {
-                    text = msg.message.conversation;
-                } else if (msg.message?.extendedTextMessage?.text) {
-                    text = msg.message.extendedTextMessage.text;
-                } else {
-                    text = '(pesan non-teks)';
-                }
-                console.log(`📨 Pesan masuk dari ${from}: ${text.substring(0, 50)}`);
-            }
-        });
-        
     } catch (err) {
         console.error('❌ Error dalam connectToWhatsApp:', err.message);
         console.log('🔄 Mencoba reconnect dalam 10 detik...');
