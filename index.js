@@ -12,27 +12,25 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import express from 'express';
-import { Server as SocketIO } from 'socket.io';
 import session from 'express-session';
 import cookieParser from 'cookie-parser';
-import readline from 'readline';
 import { SESSION_CONFIG, API_KEY } from './config/auth.js';
 import { verifyApiKey, requireAuth, login } from './middleware/auth.js';
 
-// Load environment variables
 dotenv.config();
 
-// ============ KONFIGURASI AWAL ============
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const logger = P({ level: 'info' });
+// Logger silent untuk mengurangi overhead proses
+const logger = P({ level: 'silent' });
 
-// Variabel global
 let sock = null;
 let isConnected = false;
+let pairingRequested = false;
+let reconnectAttempts = 0;
 let currentQR = null;
+const MAX_RECONNECT_ATTEMPTS = 10;
 
-// Express app setup
 const app = express();
 app.use(express.json());
 app.use(cookieParser());
@@ -40,54 +38,43 @@ app.use(session(SESSION_CONFIG));
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 
-// CORS headers
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.header('Access-Control-Allow-Headers', 'Content-Type, X-API-Key');
-    if (req.method === 'OPTIONS') {
-        res.sendStatus(200);
-    } else {
-        next();
-    }
+    if (req.method === 'OPTIONS') { res.sendStatus(200); } else { next(); }
 });
 
-// Serve static files
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Readline interface (hanya untuk pairing manual via terminal jika diperlukan)
-const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-});
+// ============ EVENT HANDLER (sama seperti kode lama) ============
+function setupSocketEvents(socket, saveCreds) {
+    socket.ev.on('creds.update', saveCreds);
 
-// ============ EVENT HANDLER ============
-function setupSocketEvents(socket) {
     socket.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
-        if (qr) {
-            currentQR = qr;
-            console.log('\n📱 QR Code telah di-generate');
+        if (qr) currentQR = qr;
+
+        // Skip pairing prompt di cPanel (tidak ada terminal)
+        if ((connection === 'connecting' || qr) && !socket.authState.creds.registered && !pairingRequested) {
+            pairingRequested = true;
+            console.log('⏳ Menunggu pairing code dari dashboard...');
+            console.log('💡 Gunakan dashboard /dashboard untuk request pairing code');
         }
 
         if (connection === 'open') {
             isConnected = true;
-            console.log('\n╔══════════════════════════════════════════════════════════════╗');
-            console.log('║                    ✅ WHATSAPP TERHUBUNG!                    ║');
-            console.log(`║  📱 Nomor: ${(socket.user?.id || 'Unknown').padEnd(44)}║`);
-            console.log('╚══════════════════════════════════════════════════════════════╝');
-            console.log('\n🚀 API siap digunakan!\n');
+            reconnectAttempts = 0;
+            console.log(`✅ WhatsApp connected: ${socket.user?.id || 'Unknown'}`);
         }
 
         if (connection === 'close') {
             isConnected = false;
-
             let statusCode = null;
             if (lastDisconnect && lastDisconnect.error && lastDisconnect.error.output) {
                 statusCode = lastDisconnect.error.output.statusCode;
             }
-
             console.log(`\n⚠️ Koneksi terputus. Status code: ${statusCode || 'unknown'}`);
 
             if (statusCode === 405) {
@@ -95,13 +82,13 @@ function setupSocketEvents(socket) {
                 if (fs.existsSync('auth_info_baileys')) {
                     fs.rmSync('auth_info_baileys', { recursive: true, force: true });
                 }
-                sock = null;
+                pairingRequested = false;
+                setTimeout(connectToWhatsApp, 3000);
                 return;
             }
 
             if (statusCode === DisconnectReason.restartRequired) {
-                console.log('🔄 Restart required, socket akan di-reconnect saat request berikutnya');
-                sock = null;
+                setTimeout(connectToWhatsApp, 2000);
                 return;
             }
 
@@ -109,81 +96,141 @@ function setupSocketEvents(socket) {
                 console.log('🔑 Session logout — membersihkan data autentikasi...');
                 if (fs.existsSync('auth_info_baileys')) {
                     fs.rmSync('auth_info_baileys', { recursive: true, force: true });
-                    console.log('🗑️ Folder auth_info_baileys dihapus');
                 }
-                sock = null;
-                console.log('🔄 Siap untuk pairing ulang...');
+                pairingRequested = false;
+                setTimeout(connectToWhatsApp, 3000);
                 return;
             }
 
-            console.log('🔄 Koneksi hilang. Akan reconnect otomatis saat ada request.');
-            sock = null;
-        }
-    });
-
-    socket.ev.on('messages.upsert', async ({ messages, type }) => {
-        if (type === 'notify' && !messages[0].key.fromMe) {
-            const msg = messages[0];
-            const from = msg.key.remoteJid;
-            let text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '(pesan non-teks)';
-            console.log(`📨 Pesan masuk dari ${from}: ${text.substring(0, 50)}`);
+            if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                reconnectAttempts++;
+                const delay = Math.min(5000 * Math.pow(1.5, reconnectAttempts - 1), 60000);
+                setTimeout(connectToWhatsApp, delay);
+            }
         }
     });
 }
 
-// ============ CONNECT ON-DEMAND ============
-/**
- * Connect ke WhatsApp menggunakan auth yang sudah ada.
- * Hanya dipanggil saat ada request kirim pesan.
- */
+// ============ CONNECT TO WHATSAPP (kode lama — auto-reconnect loop) ============
+async function connectToWhatsApp() {
+    try {
+        const { version, isLatest } = await fetchLatestBaileysVersion();
+        console.log(`📱 WhatsApp v${version.join('.')} ${isLatest ? '(latest)' : '(update available)'}`);
+
+        const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+
+        sock = makeWASocket({
+            auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
+            logger: P({ level: 'silent' }),
+            browser: Browsers.macOS('Chrome'),
+            printQRInTerminal: false,
+            markOnlineOnConnect: false,
+            syncFullHistory: false,
+            version: version,
+            connectTimeoutMs: 30000,
+            defaultQueryTimeoutMs: 30000,
+            keepAliveIntervalMs: 60000
+        });
+
+        setupSocketEvents(sock, saveCreds);
+
+    } catch (err) {
+        console.error('❌ Error dalam connectToWhatsApp:', err.message);
+        console.log('🔄 Mencoba reconnect dalam 10 detik...');
+        setTimeout(connectToWhatsApp, 10000);
+    }
+}
+
+// ============ CONNECT ON-DEMAND (untuk kirim pesan setelah pairing) ============
 async function ensureConnected() {
-    if (isConnected && sock) {
-        return;
-    }
+    if (isConnected && sock) return;
 
-    console.log('⚠️ WhatsApp belum terhubung, mencoba connect...');
+    const maxRetries = 3;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        console.log(`⚠️ Mencoba connect ke WhatsApp (attempt ${attempt}/${maxRetries})...`);
 
-    if (sock) {
-        try { await sock.end(undefined); } catch (e) { /* ignore */ }
-        sock = null;
-    }
+        if (sock) {
+            try { await sock.end(undefined); } catch (e) {}
+            await new Promise(r => setTimeout(r, 1000));
+            sock = null;
+        }
 
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+        const { version } = await fetchLatestBaileysVersion();
+        console.log(`📱 Menggunakan versi: ${version.join('.')}`);
 
-    if (!state.creds?.registered && !state.creds?.me) {
-        throw new Error('WhatsApp belum dipairing. Silakan pairing via dashboard /dashboard');
-    }
+        const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
 
-    sock = makeWASocket({
-        auth: {
-            creds: state.creds,
-            keys: makeCacheableSignalKeyStore(state.keys, logger)
-        },
-        logger: P({ level: 'silent' }),
-        browser: Browsers.macOS('Chrome'),
-        printQRInTerminal: false,
-        markOnlineOnConnect: false,
-        syncFullHistory: false,
-        connectTimeoutMs: 30000,
-        defaultQueryTimeoutMs: 30000,
-        keepAliveIntervalMs: 25000,
-    });
+        if (!state.creds?.registered && !state.creds?.me) {
+            throw new Error('WhatsApp belum dipairing. Silakan pairing ulang via dashboard.');
+        }
 
-    sock.ev.on('creds.update', saveCreds);
-    setupSocketEvents(sock);
-
-    // Tunggu sampai connected (max 15 detik)
-    const maxWait = 15000;
-    const startTime = Date.now();
-    while (Date.now() - startTime < maxWait) {
-        if (isConnected) {
+        try {
+            await waitForConnection(state, saveCreds, version);
             console.log('✅ Koneksi WhatsApp berhasil');
             return;
+        } catch (err) {
+            console.error(`❌ Attempt ${attempt} gagal: ${err.message}`);
+            if (attempt === maxRetries) {
+                throw new Error(`Gagal connect ke WhatsApp setelah ${maxRetries} percobaan: ${err.message}`);
+            }
+            await new Promise(r => setTimeout(r, 2000 * attempt));
         }
-        await new Promise(resolve => setTimeout(resolve, 500));
     }
+}
 
-    throw new Error('Timeout: tidak bisa connect setelah 15 detik');
+function waitForConnection(state, saveCreds, version) {
+    return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Timeout 20 detik')), 20000);
+
+        sock = makeWASocket({
+            auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
+            logger: P({ level: 'silent' }),
+            browser: Browsers.macOS('Chrome'),
+            printQRInTerminal: false,
+            markOnlineOnConnect: false,
+            syncFullHistory: false,
+            version: version,
+            connectTimeoutMs: 30000,
+            defaultQueryTimeoutMs: 30000,
+            keepAliveIntervalMs: 60000
+        });
+
+        sock.ev.on('creds.update', saveCreds);
+
+        sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect, qr } = update;
+            if (qr) currentQR = qr;
+
+            if (connection === 'open') {
+                clearTimeout(timeout);
+                isConnected = true;
+                console.log(`✅ WhatsApp connected: ${sock?.user?.id || 'Unknown'}`);
+                resolve();
+            }
+
+            if (connection === 'close') {
+                isConnected = false;
+                let statusCode = null;
+                if (lastDisconnect?.error?.output) statusCode = lastDisconnect.error.output.statusCode;
+                console.log(`\n⚠️ Koneksi terputus. Status code: ${statusCode || 'unknown'}`);
+
+                clearTimeout(timeout);
+                sock = null;
+
+                if (statusCode === DisconnectReason.loggedOut) {
+                    if (fs.existsSync('auth_info_baileys')) fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+                    reject(new Error('WhatsApp logout. Hapus folder auth dan pairing ulang.'));
+                    return;
+                }
+                if (statusCode === 405) {
+                    if (fs.existsSync('auth_info_baileys')) fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+                    reject(new Error('Protocol mismatch. Restart server.'));
+                    return;
+                }
+                reject(new Error('Connection closed'));
+            }
+        });
+    });
 }
 
 // ============ FUNGSI KIRIM PESAN ============
@@ -199,9 +246,7 @@ export async function sendTextMessage(phoneNumber, message) {
     }
 
     const [exists] = await sock.onWhatsApp(jid);
-    if (!exists || !exists.exists) {
-        throw new Error(`Nomor ${phoneNumber} tidak terdaftar di WhatsApp`);
-    }
+    if (!exists || !exists.exists) throw new Error(`Nomor ${phoneNumber} tidak terdaftar di WhatsApp`);
 
     const result = await sock.sendMessage(exists.jid, { text: message });
     console.log(`✅ Pesan terkirim ke ${phoneNumber}`);
@@ -220,19 +265,13 @@ export async function sendImageMessage(phoneNumber, imageSource, caption = '') {
     }
 
     const [exists] = await sock.onWhatsApp(jid);
-    if (!exists || !exists.exists) {
-        throw new Error(`Nomor ${phoneNumber} tidak terdaftar di WhatsApp`);
-    }
+    if (!exists || !exists.exists) throw new Error(`Nomor ${phoneNumber} tidak terdaftar di WhatsApp`);
 
     let imageData;
     if (typeof imageSource === 'string') {
-        if (imageSource.startsWith('http://') || imageSource.startsWith('https://')) {
-            imageData = { url: imageSource };
-        } else if (fs.existsSync(imageSource)) {
-            imageData = fs.readFileSync(imageSource);
-        } else {
-            throw new Error('Image source tidak valid');
-        }
+        if (imageSource.startsWith('http://') || imageSource.startsWith('https://')) imageData = { url: imageSource };
+        else if (fs.existsSync(imageSource)) imageData = fs.readFileSync(imageSource);
+        else throw new Error('Image source tidak valid');
     } else if (Buffer.isBuffer(imageSource)) {
         imageData = imageSource;
     } else {
@@ -240,7 +279,7 @@ export async function sendImageMessage(phoneNumber, imageSource, caption = '') {
     }
 
     const result = await sock.sendMessage(exists.jid, { image: imageData, caption });
-    console.log(`✅ Gambar terkirim ke ${phoneNumber}${caption ? `: ${caption}` : ''}`);
+    console.log(`✅ Gambar terkirim ke ${phoneNumber}`);
     return result;
 }
 
@@ -256,13 +295,8 @@ export async function sendDocumentMessage(phoneNumber, documentPath, fileName, c
     }
 
     const [exists] = await sock.onWhatsApp(jid);
-    if (!exists || !exists.exists) {
-        throw new Error(`Nomor ${phoneNumber} tidak terdaftar di WhatsApp`);
-    }
-
-    if (!fs.existsSync(documentPath)) {
-        throw new Error(`File tidak ditemukan: ${documentPath}`);
-    }
+    if (!exists || !exists.exists) throw new Error(`Nomor ${phoneNumber} tidak terdaftar di WhatsApp`);
+    if (!fs.existsSync(documentPath)) throw new Error(`File tidak ditemukan: ${documentPath}`);
 
     const fileBuffer = fs.readFileSync(documentPath);
     const ext = path.extname(documentPath).toLowerCase();
@@ -280,21 +314,17 @@ export async function sendDocumentMessage(phoneNumber, documentPath, fileName, c
         fileName: fileName || path.basename(documentPath),
         caption
     });
-
     console.log(`✅ Dokumen terkirim ke ${phoneNumber}: ${fileName}`);
     return result;
 }
 
-// ============ EXPRESS ROUTES ============
-
+// ============ ROUTES ============
 app.get('/login', (req, res) => { res.render('login'); });
 
 app.post('/api/auth/login', async (req, res) => {
     try {
         const { username, password } = req.body;
-        if (!username || !password) {
-            return res.status(400).json({ success: false, error: 'Username dan password wajib diisi' });
-        }
+        if (!username || !password) return res.status(400).json({ success: false, error: 'Username dan password wajib diisi' });
         const result = await login(username, password);
         if (result.success) {
             req.session.isAuthenticated = true;
@@ -316,176 +346,135 @@ app.post('/api/auth/logout', (req, res) => {
 });
 
 app.get('/api/auth/check', (req, res) => {
-    if (req.session && req.session.isAuthenticated) {
-        res.json({ authenticated: true, user: req.session.user });
-    } else {
-        res.json({ authenticated: false });
-    }
+    if (req.session && req.session.isAuthenticated) res.json({ authenticated: true, user: req.session.user });
+    else res.json({ authenticated: false });
 });
 
-app.get('/dashboard', requireAuth, (req, res) => {
-    res.render('dashboard', { apiKey: API_KEY });
-});
+app.get('/dashboard', requireAuth, (req, res) => { res.render('dashboard', { apiKey: API_KEY }); });
 
 app.get('/', (req, res) => {
-    if (req.session && req.session.isAuthenticated) {
-        res.redirect('/dashboard');
-    } else {
-        res.redirect('/login');
-    }
+    if (req.session && req.session.isAuthenticated) res.redirect('/dashboard');
+    else res.redirect('/login');
 });
 
-// API: Kirim Pesan Teks
 app.get('/api/send-text', verifyApiKey, async (req, res) => {
     const { to, message } = req.query;
-    if (!to || !message) {
-        return res.status(400).json({ status: false, error: 'Parameter "to" dan "message" wajib diisi' });
-    }
+    if (!to || !message) return res.status(400).json({ status: false, error: 'Parameter "to" dan "message" wajib diisi' });
     try {
         const result = await sendTextMessage(to, message);
         res.json({ status: true, message: 'Pesan terkirim', to, result });
-    } catch (err) {
-        res.status(500).json({ status: false, error: err.message });
-    }
+    } catch (err) { res.status(500).json({ status: false, error: err.message }); }
 });
 
-// API: Kirim Gambar
 app.get('/api/send-image', verifyApiKey, async (req, res) => {
     const { to, image, caption } = req.query;
-    if (!to || !image) {
-        return res.status(400).json({ status: false, error: 'Parameter "to" dan "image" wajib diisi' });
-    }
+    if (!to || !image) return res.status(400).json({ status: false, error: 'Parameter "to" dan "image" wajib diisi' });
     try {
         const result = await sendImageMessage(to, image, caption || '');
         res.json({ status: true, message: 'Gambar terkirim', to, result });
-    } catch (err) {
-        res.status(500).json({ status: false, error: err.message });
-    }
+    } catch (err) { res.status(500).json({ status: false, error: err.message }); }
 });
 
-// API: Kirim Dokumen
 app.get('/api/send-document', verifyApiKey, async (req, res) => {
     const { to, document, filename, caption } = req.query;
-    if (!to || !document) {
-        return res.status(400).json({ status: false, error: 'Parameter "to" dan "document" wajib diisi' });
-    }
+    if (!to || !document) return res.status(400).json({ status: false, error: 'Parameter "to" dan "document" wajib diisi' });
     try {
         const result = await sendDocumentMessage(to, document, filename || 'document', caption || '');
         res.json({ status: true, message: 'Dokumen terkirim', to, result });
-    } catch (err) {
-        res.status(500).json({ status: false, error: err.message });
-    }
+    } catch (err) { res.status(500).json({ status: false, error: err.message }); }
 });
 
-// API: Cek Status
 app.get('/api/status', (req, res) => {
     const hasSession = req.session && req.session.isAuthenticated;
     const apiKey = req.headers['x-api-key'] || req.query.api_key;
     const hasApiKey = apiKey === API_KEY;
+    if (!hasSession && !hasApiKey) return res.status(401).json({ status: false, error: 'Authentication required.' });
 
-    if (!hasSession && !hasApiKey) {
-        return res.status(401).json({ status: false, error: 'Authentication required.' });
-    }
-
-    let connected = false;
-    let registered = false;
+    let connected = false, registered = false;
     if (sock && sock.authState?.creds) {
         registered = !!(sock.authState.creds.registered || sock.authState.creds.me);
         connected = isConnected && registered;
     }
-
-    res.json({
-        status: true,
-        connected,
-        registered,
-        user: sock?.user?.id || sock?.authState?.creds?.me?.id || null,
-        uptime: process.uptime()
-    });
+    res.json({ status: true, connected, registered, user: sock?.user?.id || sock?.authState?.creds?.me?.id || null, uptime: process.uptime() });
 });
 
-// API: Pairing Code (via dashboard)
 app.get('/api/pair', verifyApiKey, async (req, res) => {
     const { phone } = req.query;
-    if (!phone) {
-        return res.status(400).json({ status: false, error: 'Parameter "phone" wajib diisi' });
-    }
-
+    if (!phone) return res.status(400).json({ status: false, error: 'Parameter "phone" wajib diisi' });
     try {
-        // Jika belum ada socket, buat socket baru dari auth yang ada
-        if (!sock) {
-            console.log('📱 Membuat socket untuk pairing...');
-            const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
-            sock = makeWASocket({
-                auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
-                logger: P({ level: 'silent' }),
-                browser: Browsers.macOS('Chrome'),
-                printQRInTerminal: false,
-                markOnlineOnConnect: false,
-                syncFullHistory: false,
-            });
-            sock.ev.on('creds.update', saveCreds);
-            setupSocketEvents(sock);
+        if (fs.existsSync('auth_info_baileys')) {
+            fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+            console.log('🗑️ Auth lama dihapus untuk pairing baru');
         }
+        const { version } = await fetchLatestBaileysVersion();
+        console.log(`📱 Menggunakan versi: ${version.join('.')}`);
+
+        const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+        sock = makeWASocket({
+            auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
+            logger: P({ level: 'silent' }),
+            browser: Browsers.ubuntu('Chrome'),
+            printQRInTerminal: false,
+            markOnlineOnConnect: false,
+            syncFullHistory: false,
+            version: version,
+            connectTimeoutMs: 30000,
+            defaultQueryTimeoutMs: 30000,
+            keepAliveIntervalMs: 60000
+        });
+        sock.ev.on('creds.update', saveCreds);
+
+        // Gunakan setupSocketEvents yang sama dengan connectToWhatsApp
+        setupSocketEvents(sock, saveCreds);
+
+        // Tunggu socket initializing
+        console.log('⏳ Initializing socket...');
+        await new Promise(r => setTimeout(r, 5000));
 
         const cleanNumber = phone.replace(/\D/g, '');
+        console.log(`📱 Request pairing code untuk: ${cleanNumber}`);
+
         const code = await sock.requestPairingCode(cleanNumber);
         const formattedCode = code?.match(/.{1,4}/g)?.join("-") || code;
 
-        res.json({
-            status: true,
-            message: 'Pairing code berhasil dibuat',
-            pairing_code: formattedCode,
-            phone: cleanNumber
-        });
+        console.log(`🔑 Pairing code berhasil: ${formattedCode}`);
+        console.log('⏳ Socket tetap hidup — tunggu user masukkan kode di WhatsApp (2-3 menit)');
+
+        res.json({ status: true, message: 'Pairing code berhasil dibuat', pairing_code: formattedCode, phone: cleanNumber });
     } catch (err) {
-        res.status(500).json({ status: false, error: err.message });
+        console.error('❌ Pairing code error:', err);
+        res.status(500).json({ status: false, error: err.message || 'Failed to create pairing code' });
     }
 });
 
-// API: Get QR Code
 app.get('/api/qr', verifyApiKey, async (req, res) => {
     const QRCode = await import('qrcode');
-    if (!currentQR) {
-        return res.status(404).json({ status: false, error: 'QR Code belum tersedia.' });
-    }
+    if (!currentQR) return res.status(404).json({ status: false, error: 'QR Code belum tersedia.' });
     try {
-        const qrImage = await QRCode.toDataURL(currentQR, {
-            width: 300, margin: 2,
-            color: { dark: '#075E54', light: '#FFFFFF' }
-        });
+        const qrImage = await QRCode.toDataURL(currentQR, { width: 300, margin: 2, color: { dark: '#075E54', light: '#FFFFFF' } });
         res.json({ status: true, qr_code: qrImage, message: 'QR code berhasil di-generate' });
-    } catch (err) {
-        res.status(500).json({ status: false, error: err.message });
-    }
+    } catch (err) { res.status(500).json({ status: false, error: err.message }); }
 });
 
-// API: Logout WhatsApp
 app.get('/api/logout', verifyApiKey, async (req, res) => {
     try {
-        if (sock) {
-            await sock.logout();
-        }
+        if (sock) await sock.logout();
         res.json({ status: true, message: 'Logout berhasil. Session akan dibersihkan secara otomatis.' });
-    } catch (err) {
-        res.status(500).json({ status: false, error: err.message });
-    }
+    } catch (err) { res.status(500).json({ status: false, error: err.message }); }
 });
 
 // ============ START SERVER ============
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`\n🌐 HTTP Server berjalan di http://localhost:${PORT}`);
-    console.log(`📋 Dashboard: http://localhost:${PORT}\n`);
-    console.log('💡 WhatsApp akan connect otomatis saat ada request kirim pesan.');
+    console.log(`🌐 HTTP Server on http://localhost:${PORT}`);
 });
+
+// ============ START WHATSAPP ============
+connectToWhatsApp().catch(err => { console.error('❌ Fatal error:', err); process.exit(1); });
 
 // ============ HANDLE EXIT ============
 process.on('SIGINT', async () => {
-    console.log('\n\n👋 Shutting down...');
-    if (sock) {
-        try { await sock.end(undefined); } catch (e) { /* ignore */ }
-    }
-    rl.close();
+    if (sock) { try { await sock.end(undefined); } catch (e) {} }
     process.exit(0);
 });
 
