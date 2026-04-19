@@ -313,8 +313,8 @@ app.get('/', (req, res) => {
     else res.redirect('/login');
 });
 
-app.get('/api/send-text', verifyApiKey, async (req, res) => {
-    const { to, message } = req.query;
+app.post('/api/send-text', verifyApiKey, async (req, res) => {
+    const { to, message } = req.body;
     if (!to || !message) return res.status(400).json({ status: false, error: 'Parameter "to" dan "message" wajib diisi' });
     try {
         const result = await sendTextMessage(to, message);
@@ -322,8 +322,8 @@ app.get('/api/send-text', verifyApiKey, async (req, res) => {
     } catch (err) { res.status(500).json({ status: false, error: err.message }); }
 });
 
-app.get('/api/send-image', verifyApiKey, async (req, res) => {
-    const { to, image, caption } = req.query;
+app.post('/api/send-image', verifyApiKey, async (req, res) => {
+    const { to, image, caption } = req.body;
     if (!to || !image) return res.status(400).json({ status: false, error: 'Parameter "to" dan "image" wajib diisi' });
     try {
         const result = await sendImageMessage(to, image, caption || '');
@@ -331,8 +331,8 @@ app.get('/api/send-image', verifyApiKey, async (req, res) => {
     } catch (err) { res.status(500).json({ status: false, error: err.message }); }
 });
 
-app.get('/api/send-document', verifyApiKey, async (req, res) => {
-    const { to, document, filename, caption } = req.query;
+app.post('/api/send-document', verifyApiKey, async (req, res) => {
+    const { to, document, filename, caption } = req.body;
     if (!to || !document) return res.status(400).json({ status: false, error: 'Parameter "to" dan "document" wajib diisi' });
     try {
         const result = await sendDocumentMessage(to, document, filename || 'document', caption || '');
